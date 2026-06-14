@@ -14,6 +14,7 @@
 | 同步脚本 | `sync-ai-rules.ps1` |
 | 文档门禁 | `scripts/validate_doc_task.py` |
 | 编码门禁 | `scripts/validate_encoding.py` |
+| 质量目标门禁 | `AGENTS.md` 的通用质量目标与新增能力门禁 |
 | 日志门禁 | `AGENTS.md` 的日志优先与可观测性门禁 |
 | 归因门禁 | `AGENTS.md` 的端到端问题归因门禁 |
 | 自迭代门禁 | `AGENTS.md` 的门禁 warning 自迭代记录 |
@@ -100,6 +101,18 @@ python scripts\validate_encoding.py `
 `Get-Content`、`Set-Content`、`Out-File`、`Add-Content` 缺少 `-Encoding`，
 Python 文本 I/O 缺少 `encoding="utf-8"`，以及 Windows PowerShell 5.1 读取
 非 ASCII `.ps1` 时可能需要 BOM 或解析器验证。脚本只报告问题，不自动转码或重写文件。
+
+## 通用质量目标门禁
+
+新增或大幅修改功能、规则、脚本、自动化、流程、模板、文档机制、验证策略或协作方式时，
+不能只完成眼前产物，还要检查它是否满足通用质量目标：自我迭代升级、系统化、流程化、
+内容准确化、可量化、减少错误和复发、降低 token/context 输入量、减少无效上下文和提速。
+
+task tracking 需要填写“通用质量目标记录”，用可验证的代理指标说明效果，例如
+warning/error 数量变化、复发次数、验证命令通过数、人工步骤减少数、读取文件数、
+`rg` 查询数、必读文件清单长度、brief 行数、脚本化检查项数、恢复读取清单长度、
+未确认推断数量和剩余观察项。没有真实 token 统计时，只能说明降低上下文输入量，
+不能声称精确节省 token。
 
 ## 日志优先与可观测性门禁
 
