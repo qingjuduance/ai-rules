@@ -1,4 +1,0 @@
-interface:
-  display_name: "Locate Pasted Content"
-  short_description: "Find source files for pasted snippets"
-  default_prompt: "Use $locate-pasted-content to locate where my pasted code or notes come from before editing."

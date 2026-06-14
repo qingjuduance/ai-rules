@@ -1,19 +1,60 @@
 {
   "name": "ai-rules",
-  "description": "Reusable Codex/AI collaboration rules extracted from the self workspace.",
-  "schema_version": 1,
-  "source_workspace": "D:/root/file/resume/self",
+  "description": "Reusable common Codex/AI collaboration rules.",
+  "schema_version": 2,
+  "rules_layout": {
+    "root_entry_target": "AGENTS.md",
+    "common_rules_source": "AGENTS.md",
+    "common_rules_target": ".codex/rules/common/AGENTS.md",
+    "project_rules_target": ".codex/rules/project/AGENTS.md",
+    "project_rules_policy": "create_placeholder_only"
+  },
   "managed_paths": [
-    "AGENTS.md",
-    ".codex/skills/agents-rule-maintainer",
-    ".codex/skills/locate-pasted-content",
-    ".codex/skills/self-correction-planner",
-    "scripts/agent_comm.py",
-    "scripts/agent_group_status.py",
-    "scripts/scan_corrections.py",
-    "scripts/scan_markdown_compliance.py",
-    "docs/_meta/agent-collaboration.md",
-    "check-ai-rules-sync.ps1"
+    {
+      "source": "AGENTS.md",
+      "target": ".codex/rules/common/AGENTS.md",
+      "type": "file"
+    },
+    {
+      "source": ".codex/skills/agents-rule-maintainer",
+      "target": ".codex/skills/agents-rule-maintainer",
+      "type": "directory"
+    },
+    {
+      "source": ".codex/skills/self-correction-planner",
+      "target": ".codex/skills/self-correction-planner",
+      "type": "directory"
+    },
+    {
+      "source": "scripts/agent_comm.py",
+      "target": "scripts/agent_comm.py",
+      "type": "file"
+    },
+    {
+      "source": "scripts/agent_group_status.py",
+      "target": "scripts/agent_group_status.py",
+      "type": "file"
+    },
+    {
+      "source": "scripts/scan_corrections.py",
+      "target": "scripts/scan_corrections.py",
+      "type": "file"
+    },
+    {
+      "source": "check-ai-rules-sync.ps1",
+      "target": "check-ai-rules-sync.ps1",
+      "type": "file"
+    }
+  ],
+  "generated_paths": [
+    "AGENTS.md"
+  ],
+  "preserved_paths": [
+    ".codex/rules/project/",
+    ".codex/task-tracking/",
+    ".codex/pending-tasks/",
+    ".codex/agent-comm/",
+    ".codex/agent-groups/"
   ],
   "sync_policy": {
     "trigger": "new_session_start",
@@ -28,4 +69,3 @@
     "auto_refresh_default": true
   }
 }
-
