@@ -344,7 +344,7 @@ def print_status_text(snapshot: dict[str, Any], task_slug: str | None) -> None:
             print(f"  {wt['task_slug']}:")
             print(f"    path: {wt['absolute_path']}")
             print(f"    branch: {wt['branch']}")
-            print(f"    head: {wt['head']}")
+            print(f"    head_at_snapshot: {wt['head_at_snapshot']}")
             print(f"    dirty: {'yes' if wt['dirty'] else 'no'}")
             print(f"    merged_to_{wt['target_ref']}: {merged_label}")
         print()
