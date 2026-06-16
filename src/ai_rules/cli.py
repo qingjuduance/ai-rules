@@ -18,6 +18,7 @@ from ai_rules.records import scan_corrections, task_queue, tool_flow, tool_invoc
 from ai_rules.sync import check as sync_check
 from ai_rules.validation import encoding, selftest
 from ai_rules.worktree import coord as worktree_coord
+from ai_rules.worktree import task as worktree_task
 
 
 COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
@@ -41,6 +42,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "validate-doc": ("Validate document task evidence.", validate_doc_task.main),
     "validate-encoding": ("Validate text encoding and source hygiene.", encoding.main),
     "worktree-coord": ("Coordinate sessions across git worktrees.", worktree_coord.main),
+    "worktree-task": ("Create and close fixed task worktrees.", worktree_task.main),
 }
 
 

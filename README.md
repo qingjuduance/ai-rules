@@ -1,4 +1,4 @@
-# AI Rules
+﻿# AI Rules
 
 ## 快速索引
 
@@ -336,7 +336,29 @@ git push origin main
 `.codex/ai-rules/` 仓库，也从 ai-rules 仓库执行 `git worktree add`，把新工作区放到宿主
 项目的 `.codex/project/.worktree/` 下。
 
-示例：
+优先使用固定脚本入口：
+
+```powershell
+python .codex\ai-rules\scripts\ai_rules.py worktree-task create `
+  --title "worktree fixed task script" `
+  --repo ai-rules `
+  --task-slug worktree-task-script `
+  --scope src/ai_rules/worktree `
+  --scope src/ai_rules/cli.py `
+  --task-tracking .codex/project/records/task-tracking/2026-06-16-worktree固定脚本.md `
+  --register-session
+
+python .codex\ai-rules\scripts\ai_rules.py worktree-task status
+python .codex\ai-rules\scripts\ai_rules.py worktree-task close --repo ai-rules --task-slug worktree-task-script
+python .codex\ai-rules\scripts\ai_rules.py worktree-task remove --repo ai-rules --task-slug worktree-task-script
+```
+
+`remove` 默认只输出 dry-run 计划；只有显式传 `--execute` 才会调用
+`git worktree remove`，且默认拒绝移除 dirty worktree。固定脚本会把路径限制在宿主
+项目 `.codex/project/.worktree/<task-slug>/`，创建时可自动登记
+`worktree-coord` session 和写锁。
+
+手工 fallback 示例：
 
 ```powershell
 New-Item -ItemType Directory -Force .codex\project\.worktree | Out-Null
