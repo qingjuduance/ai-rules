@@ -163,6 +163,29 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Coord/session state must match Git live worktree state at this runtime boundary.",
             )
         )
+    if "host-submodule-closeout" in gate_steps:
+        closeout_args = [
+            "worktree-task",
+            "host-closeout",
+            "--project-root",
+            str(host_project_root(root)),
+            "--repo",
+            "ai-rules",
+            "--require-task-tracking",
+        ]
+        if args.task_tracking:
+            closeout_args.extend(["--task-tracking", args.task_tracking])
+        if args.final:
+            closeout_args.append("--require-clean-host")
+        steps.append(
+            GateStep(
+                name="ai_rules.py worktree-task host-closeout",
+                phase="coordination",
+                command=cli_command(py, entrypoint, *closeout_args),
+                final_gate=args.final,
+                reason="Embedded ai-rules merges must update the host gitlink, task state, and task tracking.",
+            )
+        )
     if python_paths and "py-compile" in gate_steps:
         steps.append(
             GateStep(

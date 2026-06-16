@@ -309,6 +309,172 @@ def last_commit_message(path: Path) -> str:
     return git_text(["log", "-1", "--pretty=%s"], path, allow_fail=True)
 
 
+def host_gitlink_record(project_root: Path, submodule_path: str) -> dict[str, str]:
+    """Return the host index gitlink record for an embedded repository."""
+    result = git_run(["ls-files", "--stage", "--", submodule_path], project_root, check=False)
+    if result.returncode != 0:
+        return {"error": result.stderr.strip() or result.stdout.strip()}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            return {
+                "mode": parts[0],
+                "head_full_at_index": parts[1],
+                "stage": parts[2],
+                "path": parts[3],
+            }
+    return {}
+
+
+def status_for_paths(project_root: Path, paths: list[str]) -> list[str]:
+    """Return git status lines for selected host paths."""
+    if not paths:
+        return []
+    result = git_run(["status", "--short", "--", *paths], project_root, check=False)
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def resolve_project_paths(project_root: Path, values: list[str] | None) -> list[Path]:
+    """Resolve user-provided paths against the host project root."""
+    resolved: list[Path] = []
+    for value in values or []:
+        path = Path(value)
+        if not path.is_absolute():
+            path = project_root / path
+        path = path.resolve()
+        if path not in resolved:
+            resolved.append(path)
+    return resolved
+
+
+def auto_task_tracking_paths(project_root: Path, task_slug: str | None) -> list[Path]:
+    """Find likely task tracking files for a task slug."""
+    if not task_slug:
+        return []
+    tracking_root = project_root / ".codex" / "project" / "records" / "task-tracking"
+    if not tracking_root.exists():
+        return []
+    matches = sorted(tracking_root.glob(f"*{task_slug}*.md"))
+    return [path.resolve() for path in matches if path.is_file()]
+
+
+def state_ai_rules_head(state_path: Path) -> str:
+    """Read the ai-rules main HEAD recorded in worktrees.json."""
+    if not state_path.exists():
+        return ""
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    ai_rules = data.get("ai-rules")
+    if not isinstance(ai_rules, dict):
+        return ""
+    return str(ai_rules.get("main_head_full_at_snapshot", ""))
+
+
+def project_relative_status_path(project_root: Path, path: Path) -> str:
+    """Return a Git status path relative to the host project root."""
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+def build_host_closeout_report(
+    project_root: Path,
+    *,
+    repo: str,
+    task_slug: str | None = None,
+    task_tracking: list[str] | None = None,
+    require_task_tracking: bool = False,
+    require_clean_host: bool = False,
+) -> dict[str, Any]:
+    """Check host-side submodule gitlink, state, and task tracking closeout."""
+    issues: list[str] = []
+    if repo != "ai-rules":
+        issues.append("host closeout currently applies only to the embedded ai-rules repository")
+
+    source_repo = source_repo_for(project_root, repo)
+    embedded_path = ".codex/ai-rules"
+    embedded_head = current_head(source_repo)
+    gitlink = host_gitlink_record(project_root, embedded_path)
+    gitlink_head = gitlink.get("head_full_at_index", "")
+    if gitlink.get("mode") != "160000":
+        issues.append(f"host index does not track {embedded_path} as a gitlink submodule")
+    elif gitlink_head != embedded_head:
+        issues.append(
+            f"host gitlink {embedded_path} points to {gitlink_head[:7] or '<missing>'}, "
+            f"but embedded ai-rules HEAD is {embedded_head[:7]}"
+        )
+
+    state_path = project_root / ".codex" / "project" / "state" / "worktrees.json"
+    state_head = state_ai_rules_head(state_path)
+    if not state_path.exists():
+        issues.append("host worktree state file is missing: .codex/project/state/worktrees.json")
+    elif state_head != embedded_head:
+        issues.append(
+            "host worktree state is not refreshed for embedded ai-rules HEAD "
+            f"(state={state_head[:7] or '<missing>'}, head={embedded_head[:7]})"
+        )
+
+    tracking_paths = resolve_project_paths(project_root, task_tracking)
+    if not tracking_paths:
+        tracking_paths = auto_task_tracking_paths(project_root, task_slug)
+    tracking_reports: list[dict[str, Any]] = []
+    if require_task_tracking and not tracking_paths:
+        issues.append("no task tracking file was provided or found for host closeout")
+    for path in tracking_paths:
+        report = {
+            "path": project_relative_status_path(project_root, path),
+            "exists": path.exists(),
+            "mentions_task_slug": False,
+            "mentions_ai_rules_head": False,
+        }
+        if not path.exists():
+            issues.append(f"task tracking file is missing: {report['path']}")
+        else:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            report["mentions_task_slug"] = bool(task_slug and task_slug in text)
+            report["mentions_ai_rules_head"] = embedded_head in text or embedded_head[:7] in text
+            if require_task_tracking and not report["mentions_ai_rules_head"]:
+                issues.append(
+                    f"task tracking file does not mention current embedded ai-rules HEAD {embedded_head[:7]}: "
+                    f"{report['path']}"
+                )
+        tracking_reports.append(report)
+
+    relevant_paths = [
+        embedded_path,
+        ".codex/project/state/worktrees.json",
+        *[project_relative_status_path(project_root, path) for path in tracking_paths],
+    ]
+    relevant_status = status_for_paths(project_root, relevant_paths)
+    host_status = short_status(project_root)
+    if require_clean_host and host_status:
+        issues.append("host repository is not clean; commit gitlink, state, and task tracking closeout first")
+
+    return {
+        "repo": repo,
+        "embedded_path": embedded_path,
+        "embedded_head_full": embedded_head,
+        "embedded_head": embedded_head[:7],
+        "host_gitlink": gitlink,
+        "state_file": project_relative_status_path(project_root, state_path),
+        "state_ai_rules_head_full": state_head,
+        "state_ai_rules_head": state_head[:7] if state_head else "",
+        "task_slug": task_slug or "",
+        "task_tracking": tracking_reports,
+        "relevant_host_status": relevant_status,
+        "host_status_short": host_status.splitlines() if host_status else [],
+        "issues": issues,
+        "next_actions": [
+            "run worktree-task status --write-state after merging ai-rules worktrees",
+            "commit the host .codex/ai-rules gitlink, .codex/project/state/worktrees.json, and task tracking record",
+            "rerun worktree-task host-closeout --require-clean-host before final reply",
+        ],
+    }
+
+
 def build_worktree_record(
     wt: dict[str, str],
     *,
@@ -380,6 +546,14 @@ def build_status_snapshot(
                 "--require-merged --require-no-task-worktrees"
             ),
             "branch_cleanup_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task cleanup-branch --execute",
+            "host_closeout_command": (
+                "python .codex/ai-rules/scripts/ai_rules.py worktree-task host-closeout "
+                "--repo ai-rules --require-task-tracking --require-clean-host"
+            ),
+            "embedded_ai_rules_merge_closeout": (
+                "After merging an ai-rules task worktree, the host repository must commit "
+                ".codex/ai-rules gitlink, .codex/project/state/worktrees.json, and related task tracking."
+            ),
         },
     }
 
@@ -1069,6 +1243,17 @@ def command_merge(args: argparse.Namespace) -> int:
         "  python .codex/ai-rules/scripts/ai_rules.py worktree-task cleanup-branch "
         f"--repo {args.repo} --task-slug {args.task_slug} --execute"
     )
+    if args.repo == "ai-rules":
+        print("Host repository closeout is also required for embedded ai-rules merges:")
+        print("  python .codex/ai-rules/scripts/ai_rules.py worktree-task status --write-state")
+        host_cmd = (
+            "  python .codex/ai-rules/scripts/ai_rules.py worktree-task host-closeout "
+            f"--repo ai-rules --task-slug {args.task_slug} --require-task-tracking"
+        )
+        for tracking_path in args.task_tracking or []:
+            host_cmd += f" --task-tracking {tracking_path}"
+        print(host_cmd)
+        print("  git add .codex/ai-rules .codex/project/state/worktrees.json <related task tracking>")
 
     if args.queue_item:
         mark_cmd = [
@@ -1122,6 +1307,19 @@ def command_finalize(args: argparse.Namespace) -> int:
                 issues.append(f"{label} is not merged to {wt.get('target_ref')}")
     if args.require_no_task_worktrees and total_task_worktrees:
         issues.append(f"task worktrees still exist: {total_task_worktrees}")
+    host_closeout_report: dict[str, Any] | None = None
+    if args.require_host_closeout:
+        host_closeout_report = build_host_closeout_report(
+            repo_root,
+            repo="ai-rules",
+            task_slug=args.host_task_slug,
+            task_tracking=args.task_tracking,
+            require_task_tracking=args.require_task_tracking,
+            require_clean_host=args.require_clean_host,
+        )
+        for issue in host_closeout_report.get("issues", []):
+            issues.append(f"host closeout: {issue}")
+        snapshot["host_closeout"] = host_closeout_report
 
     if args.format == "json":
         print(json.dumps({"snapshot": snapshot, "issues": issues}, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1132,6 +1330,11 @@ def command_finalize(args: argparse.Namespace) -> int:
         print(f"  task_worktrees: {total_task_worktrees}")
         print(f"  dirty_task_worktrees: {dirty_task_worktrees}")
         print(f"  unmerged_task_worktrees: {unmerged_task_worktrees}")
+        if host_closeout_report is not None:
+            print("  host_closeout:")
+            print(f"    embedded_ai_rules_head: {host_closeout_report.get('embedded_head')}")
+            print(f"    state_ai_rules_head: {host_closeout_report.get('state_ai_rules_head')}")
+            print(f"    relevant_host_status: {len(host_closeout_report.get('relevant_host_status', []))}")
         if issues:
             print("  issues:")
             for issue in issues:
@@ -1139,6 +1342,44 @@ def command_finalize(args: argparse.Namespace) -> int:
         else:
             print("  issues: none")
 
+    return 1 if issues else 0
+
+
+def command_host_closeout(args: argparse.Namespace) -> int:
+    """Verify host-side closeout after embedded ai-rules merges."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    report = build_host_closeout_report(
+        repo_root,
+        repo=args.repo,
+        task_slug=args.task_slug,
+        task_tracking=args.task_tracking,
+        require_task_tracking=args.require_task_tracking,
+        require_clean_host=args.require_clean_host,
+    )
+    issues = list(report.get("issues", []))
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        gitlink = report.get("host_gitlink", {})
+        print("Host closeout gate:")
+        print(f"  repo: {report.get('repo')}")
+        print(f"  embedded_path: {report.get('embedded_path')}")
+        print(f"  embedded_head: {report.get('embedded_head')}")
+        print(f"  host_gitlink_head: {str(gitlink.get('head_full_at_index', ''))[:7]}")
+        print(f"  state_ai_rules_head: {report.get('state_ai_rules_head')}")
+        print(f"  task_tracking_files: {len(report.get('task_tracking', []))}")
+        relevant_status = report.get("relevant_host_status", [])
+        print(f"  relevant_host_status: {len(relevant_status)}")
+        for line in relevant_status:
+            print(f"    {line}")
+        host_status = report.get("host_status_short", [])
+        print(f"  host_status_entries: {len(host_status)}")
+        if issues:
+            print("  issues:")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("  issues: none")
     return 1 if issues else 0
 
 
@@ -1315,6 +1556,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--target-ref", default="main", help="Target branch currently checked out in the source repo.")
     merge.add_argument("--message", help="Merge commit message. Default: merge: <task-slug>.")
     merge.add_argument("--queue-item", help="Mark this integration queue item done after a successful merge.")
+    merge.add_argument("--task-tracking", action="append", help="Related host task tracking file for ai-rules host closeout.")
     merge.add_argument("--execute", action="store_true", help="Actually run git merge. Default is dry-run.")
 
     # finalize
@@ -1323,6 +1565,11 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     finalize.add_argument("--require-merged", action="store_true", help="Fail when any task worktree is not merged to target.")
     finalize.add_argument("--require-no-task-worktrees", action="store_true", help="Fail when any task worktree still exists.")
+    finalize.add_argument("--require-host-closeout", action="store_true", help="Fail unless embedded ai-rules host gitlink/state/tracking are closed out.")
+    finalize.add_argument("--host-task-slug", help="Task slug used to find related task tracking for host closeout.")
+    finalize.add_argument("--task-tracking", action="append", help="Related task tracking file for host closeout. Repeatable.")
+    finalize.add_argument("--require-task-tracking", action="store_true", help="Require task tracking to mention the current embedded ai-rules HEAD.")
+    finalize.add_argument("--require-clean-host", action="store_true", help="Fail if the host repository has any dirty status entries.")
     finalize.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     finalize.add_argument(
         "--write-state",
@@ -1330,6 +1577,18 @@ def build_parser() -> argparse.ArgumentParser:
         const="",
         help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
     )
+
+    host_closeout = subparsers.add_parser(
+        "host-closeout",
+        help="Verify host submodule gitlink, worktree state, and task tracking after embedded ai-rules merges.",
+    )
+    host_closeout.add_argument("--project-root", help="Host project root containing .codex/project.")
+    host_closeout.add_argument("--repo", choices=["ai-rules"], default="ai-rules", help="Embedded repository to verify.")
+    host_closeout.add_argument("--task-slug", "--task", dest="task_slug", help="Task slug used to find related task tracking.")
+    host_closeout.add_argument("--task-tracking", action="append", help="Related task tracking file. Repeatable.")
+    host_closeout.add_argument("--require-task-tracking", action="store_true", help="Require tracking to mention current embedded HEAD.")
+    host_closeout.add_argument("--require-clean-host", action="store_true", help="Fail if the host repository has dirty status entries.")
+    host_closeout.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
 
     # cleanup-branch
     cleanup_branch = subparsers.add_parser("cleanup-branch", help="Delete a merged task branch after its worktree is removed.")
@@ -1369,6 +1628,8 @@ def main() -> int:
         return command_merge(args)
     if args.command == "finalize":
         return command_finalize(args)
+    if args.command == "host-closeout":
+        return command_host_closeout(args)
     if args.command == "cleanup-branch":
         return command_cleanup_branch(args)
     if args.command == "remove":

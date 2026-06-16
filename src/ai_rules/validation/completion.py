@@ -74,6 +74,13 @@ def planned_checks(task_types: list[str], changed_paths: list[str]) -> list[Plan
     if "git" in task_types or any(path.startswith("src/ai_rules/worktree/") for path in changed_paths):
         add(PlannedCheck("worktree-reconcile", "ai_rules.py worktree-task reconcile --strict", "Git/worktree coordination changed or is in scope."))
         add(PlannedCheck("worktree-status", "ai_rules.py worktree-task status --write-state", "Live worktree state must be refreshed."))
+        add(
+            PlannedCheck(
+                "host-closeout",
+                "ai_rules.py worktree-task host-closeout --repo ai-rules --require-task-tracking --require-clean-host",
+                "Embedded ai-rules merges must close out host gitlink, task state, and task tracking.",
+            )
+        )
     if "resume" in task_types:
         add(PlannedCheck("resume-pdf-export", "export affected resume PDF and inspect layout", "Resume delivery files changed."))
     if "frontend" in task_types:

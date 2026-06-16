@@ -583,6 +583,26 @@ def default_components() -> list[ComponentDefinition]:
             condition="Run after live-state reconciliation and before the first file or Git write.",
         ),
         component(
+            "coordination.gate.host-submodule-closeout",
+            "cross-cutting-gate",
+            "coordination",
+            340,
+            "Verify host repository gitlink, worktree state, and task tracking after embedded ai-rules merges.",
+            events=("merge-cleanup", "final-output"),
+            task_types=("git", "rules-script"),
+            gate_label="ai_rules.py worktree-task host-closeout",
+            gate_step="host-submodule-closeout",
+            fail_policy="fail_closed",
+            requires_facts=("git_status", "worktree_reconcile_report", "task_tracking"),
+            produces_facts=("host_submodule_closeout_report",),
+            condition=(
+                "Run when an ai-rules worktree merge or embedded submodule closeout is in scope; "
+                "the node checks the host gitlink plus task state/tracking, not only the child repository."
+            ),
+            performance_budget="One host git status, one gitlink lookup, one state JSON read, and targeted task tracking reads.",
+            dedupe_key="host-submodule-closeout:project-root:ai-rules",
+        ),
+        component(
             "coordination.interceptor.agent-brief",
             "processing-interceptor",
             "coordination",

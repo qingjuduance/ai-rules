@@ -522,6 +522,31 @@ DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再
 做 live gate；除非用户明确要求保留或存在取证/恢复需要，否则最终回复不能把残留
 `.codex/project/.worktree/<task-slug>/` 当成“已完成”。
 
+嵌入式 `ai-rules` 是宿主仓库的 submodule 时，合并 `ai-rules` 任务 worktree 还会改变
+宿主仓库记录的 gitlink。这个收口不能只在 `.codex/ai-rules/` 子仓库内完成：
+
+```powershell
+python .codex\ai-rules\scripts\ai_rules.py worktree-task status --write-state
+python .codex\ai-rules\scripts\ai_rules.py worktree-task host-closeout `
+  --repo ai-rules `
+  --task-slug <task-slug> `
+  --task-tracking .codex\project\records\task-tracking\<tracking>.md `
+  --require-task-tracking
+git add .codex\ai-rules .codex\project\state\worktrees.json `
+  .codex\project\records\task-tracking\<tracking>.md
+git commit -m "chore: record ai-rules worktree merge"
+python .codex\ai-rules\scripts\ai_rules.py worktree-task host-closeout `
+  --repo ai-rules `
+  --task-slug <task-slug> `
+  --task-tracking .codex\project\records\task-tracking\<tracking>.md `
+  --require-task-tracking `
+  --require-clean-host
+```
+
+`host-closeout` 会比较宿主 index 中 `.codex/ai-rules` 的 gitlink、嵌入仓库当前 HEAD、
+`.codex/project/state/worktrees.json` 记录的 ai-rules HEAD，以及相关 task tracking
+是否写到当前 HEAD。这样能防止“子仓库已合并，但宿主仓库还指向旧规则版本”的漏收口。
+
 手工 fallback 示例：
 
 ```powershell

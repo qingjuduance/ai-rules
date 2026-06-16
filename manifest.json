@@ -75,6 +75,7 @@
       "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
+      "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-rules worktree, host closeout must verify and commit the .codex/ai-rules gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"
     },
@@ -95,7 +96,8 @@
       "components": "python .codex/ai-rules/scripts/ai_rules.py runtime components",
       "gatePool": "python .codex/ai-rules/scripts/ai_rules.py gate-pool",
       "completionTest": "python .codex/ai-rules/scripts/ai_rules.py completion-test",
-      "worktreeReconcile": "python .codex/ai-rules/scripts/ai_rules.py worktree-task reconcile --strict"
+      "worktreeReconcile": "python .codex/ai-rules/scripts/ai_rules.py worktree-task reconcile --strict",
+      "hostCloseout": "python .codex/ai-rules/scripts/ai_rules.py worktree-task host-closeout --repo ai-rules --require-task-tracking --require-clean-host"
     }
   },
   "agentEntryAdapters": [
