@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record and report Codex maintenance script invocations.
+"""Record and report AI rules maintenance script invocations.
 
 The ledger is local project state under .codex/project/logs/tool-invocations/*.jsonl.
 This script intentionally avoids external dependencies and never edits rules,
@@ -297,7 +297,7 @@ def filter_invocations(
 
 
 def format_text(invocations: list[Invocation], top: int) -> str:
-    lines = ["Codex Tool Invocation Report", f"Invocation attempts: {len(invocations)}"]
+    lines = ["AI Rules Tool Invocation Report", f"Invocation attempts: {len(invocations)}"]
     if not invocations:
         lines.extend(["", "No invocation records found."])
         return "\n".join(lines)
@@ -343,7 +343,7 @@ def format_text(invocations: list[Invocation], top: int) -> str:
 
 def format_markdown(invocations: list[Invocation], top: int) -> str:
     if not invocations:
-        return "# Codex Tool Invocation Report\n\n- Invocation attempts: 0\n"
+        return "# AI Rules Tool Invocation Report\n\n- Invocation attempts: 0\n"
 
     by_name = Counter(item.name for item in invocations)
     failures = Counter(item.name for item in invocations if item.status == "failed" or item.exit_code not in {None, 0})
@@ -352,7 +352,7 @@ def format_markdown(invocations: list[Invocation], top: int) -> str:
         latest_by_name[item.name] = item
 
     lines = [
-        "# Codex Tool Invocation Report",
+        "# AI Rules Tool Invocation Report",
         "",
         f"- Invocation attempts: {len(invocations)}",
         "",
@@ -517,7 +517,7 @@ def command_report(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Record and report Codex maintenance script invocations."
+        description="Record and report AI rules maintenance script invocations."
     )
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(

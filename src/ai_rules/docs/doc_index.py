@@ -5,7 +5,8 @@ The index is a project-local evidence file. It complements hand-maintained
 .references records by making backlinks, broken links, anchors, and code-path
 mentions queryable after code or documentation changes. Scoped checks prefer a
 directory-bubbling model: changed path -> local directory metadata -> parent
-README/AGENTS files. Cross-directory backlinks are reported as fallback risks.
+README files and AI rule adapters. Cross-directory backlinks are reported as
+fallback risks.
 """
 
 from __future__ import annotations
@@ -31,6 +32,15 @@ DEFAULT_OUTPUT = Path(".codex") / "project" / "doc-index" / "graph.json"
 DEFAULT_TARGETS = [
     "README.md",
     "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CONVENTIONS.md",
+    ".github",
+    ".cursor/rules",
+    ".clinerules",
+    ".windsurf/rules",
+    ".continue/rules",
+    ".roo/rules",
     "docs",
     ".codex/project/rules/project",
     ".codex/ai-rules/AGENTS.md",
@@ -61,6 +71,7 @@ CODE_REF_RE = re.compile(
     r"`([^`\n]+\.(?:py|md|java|xml|yml|yaml|json|properties|cpp|cc|cxx|h|hpp|go|rs|ts|js|css|html|ps1))`"
 )
 EXTERNAL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+MARKDOWN_LIKE_SUFFIXES = {".md", ".mdc"}
 
 
 @dataclass(frozen=True)
@@ -149,7 +160,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--paths",
         nargs="*",
         default=list(DEFAULT_TARGETS),
-        help="Files or directories to scan. Defaults to README.md AGENTS.md docs .codex/project/rules/project .codex/ai-rules/AGENTS.md.",
+        help="Files or directories to scan. Defaults to README.md, AI rule adapters, docs, project rules, and common ai-rules.",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
 
@@ -187,14 +198,15 @@ def iter_markdown_files(root: Path, targets: list[str]) -> list[Path]:
             path = root / path
         if not path.exists():
             continue
-        if path.is_file() and path.suffix.lower() == ".md":
+        if path.is_file() and path.suffix.lower() in MARKDOWN_LIKE_SUFFIXES:
             if not is_excluded(path, root):
                 files.add(path.resolve())
             continue
         if path.is_dir():
-            for child in path.rglob("*.md"):
-                if not is_excluded(child, root):
-                    files.add(child.resolve())
+            for pattern in ("*.md", "*.mdc"):
+                for child in path.rglob(pattern):
+                    if not is_excluded(child, root):
+                        files.add(child.resolve())
     return sorted(files)
 
 
@@ -504,6 +516,9 @@ def bubble_targets_for(root: Path, changed_path: str) -> list[str]:
     while True:
         add(current / "README.md")
         add(current / "AGENTS.md")
+        add(current / "CLAUDE.md")
+        add(current / "GEMINI.md")
+        add(current / "CONVENTIONS.md")
         add(current / ".references" / "README.md")
         add(current / ".references" / "AGENTS.md")
         if current == root:

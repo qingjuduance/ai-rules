@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Print the current Codex agent-group status board.
+"""Print the current AI agent-group status board.
 
 The script reads a structured status file maintained by the main thread.
-It does not call Codex sub-agent APIs directly; the main thread must update
+It does not call tool-specific sub-agent APIs directly; the main thread must update
 the status file when agents are spawned, paused, closed, or reused.
 """
 
@@ -23,7 +23,7 @@ DEFAULT_STATUS_FILE = AGENT_GROUP_STATUS
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Show the current Codex agent-group status board."
+        description="Show the current AI agent-group status board."
     )
     parser.add_argument(
         "--status-file",

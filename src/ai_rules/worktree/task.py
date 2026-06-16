@@ -433,7 +433,7 @@ def command_create(args: argparse.Namespace) -> int:
     # Create worktree
     git_args = ["worktree", "add", "-b", branch_name]
     if args.git_lock:
-        git_args.extend(["--lock", "--reason", args.git_lock_reason or f"Codex task {task_slug}"])
+        git_args.extend(["--lock", "--reason", args.git_lock_reason or f"AI rules task {task_slug}"])
     git_args.append(str(worktree_path))
     if args.base:
         git_args.append(args.base)
@@ -484,7 +484,7 @@ def command_create(args: argparse.Namespace) -> int:
                 "--session-id",
                 session_id,
                 "--reason",
-                args.lock_reason or f"Codex task {task_slug}",
+                args.lock_reason or f"AI rules task {task_slug}",
             ]
             for scope in args.scope:
                 lock_cmd.extend(["--scope", scope])

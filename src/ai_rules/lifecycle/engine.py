@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Codex lifecycle router for task classification, preflight, and final gates.
+"""AI rules lifecycle router for task classification, preflight, and final gates.
 
 This script turns prose workflow rules into a small executable lifecycle for the
 human/AI coordination layer: input -> classification -> preflight -> execution
@@ -64,6 +64,16 @@ TASK_KEYWORDS: dict[str, list[str]] = {
     "correction": ["correction", "漏", "错", "纠错", "修正", "没按", "遗漏"],
     "rules-script": [
         "AGENTS",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONVENTIONS.md",
+        "copilot-instructions",
+        ".cursor/rules",
+        ".clinerules",
+        ".windsurf/rules",
+        ".continue/rules",
+        ".roo/rules",
+        "adapter",
         "SKILL",
         "ai-rules",
         "gate",
@@ -244,7 +254,20 @@ def infer_task_types(text: str, changed_paths: list[str], explicit: list[str]) -
         found.append("docs")
     if ".py" in suffixes and "rules-script" not in found:
         found.append("rules-script")
-    if any(path.startswith(".codex/ai-rules") or path.endswith("AGENTS.md") for path in changed_paths):
+    adapter_path_signals = (
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONVENTIONS.md",
+        ".github/copilot-instructions.md",
+        ".github/instructions/",
+        ".cursor/rules/",
+        ".clinerules/",
+        ".windsurf/rules/",
+        ".continue/rules/",
+        ".roo/rules/",
+    )
+    if any(path.startswith(".codex/ai-rules") or path.endswith(adapter_path_signals) for path in changed_paths):
         if "rules-script" not in found:
             found.append("rules-script")
     return found
@@ -415,7 +438,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Route Codex tasks through an executable lifecycle.")
+    parser = argparse.ArgumentParser(description="Route AI maintenance tasks through an executable lifecycle.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     classify = subparsers.add_parser("classify", help="Classify input and print lifecycle routing.")

@@ -3,7 +3,7 @@
 
 The script is read-only. It reports which sections should probably remain as
 brief boundary rules, move to a skill, move to a deterministic script, or stay
-as project-specific rules. It does not edit AGENTS.md, README files, skills,
+as project-specific rules. It does not edit rule entries, README files, skills,
 tracking files, or Git state.
 """
 
@@ -107,7 +107,7 @@ PRIORITY = (
 )
 
 ACTION_TEXT = {
-    "keep-boundary": "Keep as a short AGENTS/README boundary rule.",
+    "keep-boundary": "Keep as a short rule-entry/README boundary rule.",
     "skill-candidate": "Move procedural judgement to a skill or skill reference.",
     "script-candidate": "Move deterministic checks to a script, gate, or report.",
     "program-candidate": "Consider a queue/daemon only after continuous monitoring is proven necessary.",
@@ -148,7 +148,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--paths",
         nargs="+",
-        default=("AGENTS.md", "README.md"),
+        default=("AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONVENTIONS.md", "README.md"),
         help="Markdown files or directories to audit.",
     )
     parser.add_argument(

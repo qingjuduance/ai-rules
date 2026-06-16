@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render Codex tool invocation flow from the local JSONL ledger.
+"""Render AI rules tool invocation flow from the local JSONL ledger.
 
 The script is read-only. It turns .codex/project/logs/tool-invocations/*.jsonl
 records into a time-sequence flow today, and it can use optional parent fields
@@ -70,7 +70,7 @@ class FlowReport:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render a flow graph from Codex tool invocation JSONL ledgers."
+        description="Render a flow graph from AI rules tool invocation JSONL ledgers."
     )
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
@@ -497,7 +497,7 @@ def render_issue_lines(issues: list[FlowIssue]) -> list[str]:
 
 def render_text(report: FlowReport, top: int) -> str:
     lines = [
-        "Codex Tool Flow Report",
+        "AI Rules Tool Flow Report",
         f"Root: {report.root}",
         f"Flow mode: {report.flow_mode}",
         f"Invocations: {len(report.invocations)}",
@@ -522,7 +522,7 @@ def render_text(report: FlowReport, top: int) -> str:
 def render_markdown(report: FlowReport, top: int) -> str:
     mermaid = render_mermaid(report.invocations, report.flow_mode, top)
     lines = [
-        "# Codex Tool Flow Report",
+        "# AI Rules Tool Flow Report",
         "",
         f"- Root: `{report.root}`",
         f"- Flow mode: `{report.flow_mode}`",

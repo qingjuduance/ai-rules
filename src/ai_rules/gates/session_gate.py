@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only gate for Codex session closure.
+"""Read-only gate for AI rules session closure.
 
 The gate checks whether an active pending task is still present and whether
 the current task tracking file records an execution loop: main task,
@@ -83,7 +83,7 @@ class Report:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Check Codex pending/tracking execution-loop gates."
+        description="Check AI rules pending/tracking execution-loop gates."
     )
     parser.add_argument(
         "--root",
@@ -590,7 +590,7 @@ def format_findings(title: str, items: list[Finding]) -> list[str]:
 
 def format_text(report: Report) -> str:
     lines = [
-        "Codex Session Gate Report",
+        "AI Rules Session Gate Report",
         f"Root: {report.root}",
         f"Active pending tasks: {report.active_pending_count}",
         f"Task tracking: {report.task_tracking or 'none'}",

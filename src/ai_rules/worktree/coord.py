@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coordinate Codex sessions across Git worktrees.
+"""Coordinate AI maintenance sessions across Git worktrees.
 
 The state is stored under the repository Git common directory, not inside a
 worktree copy. That makes active sessions, write locks, and integration queue
@@ -381,7 +381,7 @@ def print_json(data: Any) -> None:
 
 
 def print_summary_text(summary: dict[str, Any]) -> None:
-    print("Codex Worktree Coordination")
+    print("AI Rules Worktree Coordination")
     print(f"updated_at: {summary.get('updated_at')}")
     print(
         "sessions: "
@@ -794,7 +794,7 @@ def command_validate(args: argparse.Namespace, store: StateStore) -> int:
             }
         )
     else:
-        print("Codex Worktree Coordination Validation")
+        print("AI Rules Worktree Coordination Validation")
         for block in (
             format_findings("Errors", errors),
             format_findings("Warnings", warnings),
@@ -811,7 +811,7 @@ def command_validate(args: argparse.Namespace, store: StateStore) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Coordinate Codex sessions, locks, and integration queues across Git worktrees."
+        description="Coordinate AI maintenance sessions, locks, and integration queues across Git worktrees."
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     subparsers = parser.add_subparsers(dest="command", required=True)

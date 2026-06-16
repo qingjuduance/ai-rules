@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage the project-local Codex task workflow.
+"""Manage the project-local AI task workflow.
 
 The task state file is deliberately closer to a small workflow engine than a
 plain queue. User input first becomes a candidate or approval-waiting task.
@@ -84,7 +84,7 @@ def now_iso() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Manage Codex task workflow state.")
+    parser = argparse.ArgumentParser(description="Manage AI task workflow state.")
     parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
     parser.add_argument("--queue-file", help="Override queue JSON path.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
@@ -454,7 +454,7 @@ def queue_summary(state: dict[str, Any]) -> dict[str, Any]:
 
 def render_summary(summary: dict[str, Any]) -> str:
     lines = [
-        "Codex Task Workflow",
+        "AI Task Workflow",
         f"Total: {summary['total']}",
         "Counts: "
         + ", ".join(f"{key}={value}" for key, value in sorted(summary["counts"].items()) if value),
@@ -753,7 +753,7 @@ def command_validate(args: argparse.Namespace, root: Path, path: Path) -> int:
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print("Codex Task Workflow Validate")
+        print("AI Task Workflow Validate")
         print(f"Queue: {path.as_posix()}")
         print(f"Schema: {state.get('schema_version')}")
         print(f"Errors: {len(errors)}")
@@ -795,7 +795,7 @@ def command_heartbeat(args: argparse.Namespace, root: Path, path: Path) -> int:
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        print("Codex Task Workflow Heartbeat")
+        print("AI Task Workflow Heartbeat")
         print(f"Generated: {payload['generated_at']}")
         print(render_summary(summary))
         if payload.get("heartbeat_file"):

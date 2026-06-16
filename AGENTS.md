@@ -1,20 +1,35 @@
-# AI 通用协作规则
+# AI 执行流程通用框架
 
-本文件只保留跨项目不可绕过的协作边界和入口。可由程序检查、生成或汇总的细节，
-优先放入 `src/ai_rules/` 包、`scripts/ai_rules.py` 统一入口、通用 skill 或 README。
+本文件是 `ai-rules` 的通用执行框架事实源，同时也是兼容 `AGENTS.md` 生态的
+入口 adapter。框架规则不能绑定某一个模型、客户端或文件名；`AGENTS.md`、
+`CLAUDE.md`、`GEMINI.md`、Copilot instructions、Cursor/Cline/Windsurf/Continue
+rules 等都只是把同一套执行流程暴露给不同 AI 工具的入口适配层。
 
-## 读取顺序与规则分层
+本文件只保留跨项目不可绕过的协作边界、生命周期和入口适配原则。可由程序检查、
+生成或汇总的细节，优先放入 `src/ai_rules/` 包、`scripts/ai_rules.py`
+统一入口、通用 skill、manifest 或 README。
 
-- 目标项目根 `AGENTS.md` 是项目入口，必须先读。
-- 通用规则事实源是嵌入式 `.codex/ai-rules/AGENTS.md`。
-- 项目特有规则入口是 `.codex/project/rules/project/AGENTS.md`。
+## 读取顺序、入口适配与规则分层
+
+- 当前 AI 工具自动加载的项目原生规则入口必须先视为项目入口。常见入口包括
+  `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、
+  `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、
+  `.clinerules/`、`.windsurf/rules/*.md`、`.continue/rules/`、`.roo/rules/`
+  和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
+- `ai-rules` 的通用规则事实源仍是嵌入式 `.codex/ai-rules/AGENTS.md`；
+  这里的 `AGENTS.md` 是兼容文件名，不代表框架只服务 Codex 或 AGENTS 生态。
+- 项目特有规则默认入口是 `.codex/project/rules/project/AGENTS.md`；如果项目
+  未来改用其它内部事实源，必须在根入口 adapter、manifest 和安装配置中同步记录。
+- 各工具入口 adapter 应保持薄层：只声明读取顺序、编码、同步检查和边界，不复制
+  大段通用规则；能导入时优先导入，不能导入时用明确路径指向同一事实源。
 - `.codex/rules/common/`、根 `scripts/`、顶层 `.codex/skills/` 的旧复制模型
   不再作为通用规则 fallback。
 - 资产优先级固定为：
   1. 目标项目原生资产。
   2. `.codex/project/` 项目特化层。
   3. `.codex/ai-rules/` 通用层。
-- 通用规则不得保存项目业务、学习路线、简历规则、源码快照或本地交付细节。
+- 通用规则不得保存项目业务、学习路线、简历规则、源码快照、本地交付细节或
+  某个 AI 工具私有的交互偏好。
 - 项目规则不能放宽通用安全边界、审批流程、Git 边界和恢复现场要求。
 - Windows/PowerShell 读取中文规则文件时，设置本次进程 UTF-8 编码，并使用
   `Get-Content -Raw -Encoding UTF8`；长文件优先用
@@ -51,7 +66,7 @@
 
 - 修改文件、移动文件、运行会改变仓库状态的脚本、批量处理、导出、stage、commit
   或 push 前，必须给出带标签的计划并获得明确批准。
-- 批准标签必须可读，例如 `计划-AGENTS薄入口迁移`；多计划时普通“批准”不够明确。
+- 批准标签必须可读，例如 `计划-规则入口适配器迁移`；多计划时普通“批准”不够明确。
 - 用户回复 `批准：全部` 只批准当前请求批准消息列出的计划。
 - 用户消息先进入任务队列 `candidate` 或 `awaiting_approval`，不能直接成为 `active`。
 - 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
@@ -117,7 +132,8 @@
   `python .codex/ai-rules/scripts/ai_rules.py task-gate ...`。
 - session 收口门禁入口：
   `python .codex/ai-rules/scripts/ai_rules.py session-gate ...`。
-- 门禁脚本只读检查，不得自动修改 AGENTS、README、pending、corrections 或 Git。
+- 门禁脚本只读检查，不得自动修改规则入口 adapter、README、pending、
+  corrections 或 Git。
 - 门禁失败时，先修证据、修脚本能力或记录阻塞，不得带失败门禁发送完成态回复。
 
 ## 用户要求、触发日志与输出门禁
@@ -196,7 +212,7 @@
 
 ## Corrections 与规则自迭代
 
-- 用户指出 Codex 漏处理、错做、违反规则、验证不足或流程失效时，默认按高严重度
+- 用户指出 AI 助手漏处理、错做、违反规则、验证不足或流程失效时，默认按高严重度
   correction 处理，除非用户明确说只是轻微问题。
 - correction 独立文件是事实源；`index.md` 是派生汇总。
 - 新增或更新 correction 后必须同步独立文件、索引、当前 tracking 和返回动作。
@@ -204,8 +220,8 @@
   `python .codex/ai-rules/scripts/ai_rules.py templates correction`。
 - 扫描入口：
   `python .codex/ai-rules/scripts/ai_rules.py scan-corrections ...`。
-- 不把一次性用户原话直接堆进 AGENTS；先沉淀 correction，再判断是否升级规则、
-  脚本、skill 或 README。
+- 不把一次性用户原话直接堆进规则入口 adapter；先沉淀 correction，再判断是否
+  升级规则、脚本、skill、manifest 或 README。
 
 ## Skills
 

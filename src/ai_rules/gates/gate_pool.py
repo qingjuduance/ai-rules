@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan and run a small pool of Codex maintenance gates.
+"""Plan and run a small pool of AI rules maintenance gates.
 
 The runner is intentionally conservative: it dispatches through the unified
 ``ai_rules.py`` CLI, records every child command through the tool-invocation
@@ -46,7 +46,7 @@ class GateStep:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Codex gates as one traced pool.")
+    parser = argparse.ArgumentParser(description="Run AI rules gates as one traced pool.")
     parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
     parser.add_argument("--task-tracking", required=True, help="Task tracking file.")
     parser.add_argument("--task-type", action="append", default=[], help="Task type for task/session gates.")
@@ -301,7 +301,7 @@ def render_plan(root: Path, steps: list[GateStep], trace_id: str, fmt: str) -> s
     if fmt == "json":
         return json.dumps(payload, ensure_ascii=False, indent=2)
     lines = [
-        "Codex Gate Pool Plan",
+        "AI Rules Gate Pool Plan",
         f"Root: {root.as_posix()}",
         f"Trace: {trace_id}",
         f"Steps: {len(steps)}",

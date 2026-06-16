@@ -13,6 +13,8 @@ param(
     [switch]$NoBackup,
     [switch]$SkipRootEntry,
     [switch]$ForceRootEntry,
+    [switch]$SkipAgentAdapters,
+    [switch]$ForceAgentAdapters,
     [switch]$SkipProjectPlaceholder,
     [switch]$SkipSyncCheck
 )
@@ -258,11 +260,12 @@ function Get-SubmoduleGitOptions {
 
 function Get-RootAgentsContent {
     $lines = @(
-        '# AI Rules Entry',
+        '# AI Rules Entry Adapter',
         '',
         '## Read Order',
         '',
-        'This file is a thin entrypoint. Before working in this project, read:',
+        'This file is a thin adapter for AI tools that understand `AGENTS.md`.',
+        'Before working in this project, read:',
         '',
         '1. `.codex/ai-rules/AGENTS.md`',
         '2. `.codex/project/rules/project/AGENTS.md`',
@@ -286,13 +289,127 @@ function Get-RootAgentsContent {
         '  records the exact ai-rules commit.',
         '- Priority order: native project assets > `.codex/project/` specializations > `.codex/ai-rules/` common rules.',
         '- `.codex/project/rules/project/` belongs to this project only.',
-        '- Existing project-owned `AGENTS.md`, native project skills, and original local rules stay authoritative;',
+        '- Existing project-owned rule adapters, native project skills, and original local rules stay authoritative;',
         '  ai-rules may add missing integration notes but must not silently overwrite them.',
         '- Do not write project-specific rules back to the common ai-rules repo.',
         '- Before each new session, run `.codex/ai-rules/check-ai-rules-sync.ps1`',
         '  or an equivalent wrapper and warn until the embedded repo is synchronized.'
     )
     return ($lines -join [Environment]::NewLine)
+}
+
+function Get-AdapterBaseLines {
+    param([string]$ToolName)
+
+    return @(
+        "# $ToolName AI Rules Adapter",
+        '',
+        'This file is a thin adapter for the current AI tool. It should not duplicate',
+        'the full common rules. Before working in this project, read:',
+        '',
+        '1. `AGENTS.md` if it exists in the project root.',
+        '2. `.codex/ai-rules/AGENTS.md`.',
+        '3. `.codex/project/rules/project/AGENTS.md`.',
+        '',
+        'If `.codex/ai-rules/` is missing, read `.codex/ai-rules-config.json`,',
+        'locate the configured ai-rules repository, embed it at `.codex/ai-rules/`,',
+        'then restart the read order.',
+        '',
+        'Run `.codex/ai-rules/check-ai-rules-sync.ps1` or an equivalent wrapper at',
+        'the start of a new session. Warn until the embedded ai-rules repository is',
+        'synchronized. Do not pull or push automatically.',
+        '',
+        'Existing project-owned native instructions stay authoritative. Do not write',
+        'project-specific rules back to the common ai-rules repository.'
+    )
+}
+
+function Get-GenericAdapterContent {
+    param([string]$ToolName)
+    return ((Get-AdapterBaseLines -ToolName $ToolName) -join [Environment]::NewLine)
+}
+
+function Get-ClaudeAdapterContent {
+    $lines = @(
+        '# Claude Code AI Rules Adapter',
+        '',
+        'This file is a thin adapter for Claude Code. The `@` imports keep Claude',
+        'pointed at the shared facts instead of copying long rules here.',
+        '',
+        '@AGENTS.md',
+        '@.codex/ai-rules/AGENTS.md',
+        '@.codex/project/rules/project/AGENTS.md',
+        '',
+        'If an import is missing, read `.codex/ai-rules-config.json`, embed the',
+        '`ai-rules` repository at `.codex/ai-rules/`, then restart the read order.',
+        'Run `.codex/ai-rules/check-ai-rules-sync.ps1` at the start of a new session.'
+    )
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Get-GeminiAdapterContent {
+    $lines = @(
+        '# Gemini CLI AI Rules Adapter',
+        '',
+        'This file is a thin adapter for Gemini CLI. The `@` imports keep Gemini',
+        'pointed at the shared facts instead of copying long rules here.',
+        '',
+        '@AGENTS.md',
+        '@.codex/ai-rules/AGENTS.md',
+        '@.codex/project/rules/project/AGENTS.md',
+        '',
+        'If an import is missing, read `.codex/ai-rules-config.json`, embed the',
+        '`ai-rules` repository at `.codex/ai-rules/`, then restart the read order.',
+        'Run `.codex/ai-rules/check-ai-rules-sync.ps1` at the start of a new session.'
+    )
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Get-CursorAdapterContent {
+    $lines = @(
+        '---',
+        'alwaysApply: true',
+        '---',
+        '',
+        '# Cursor AI Rules Adapter',
+        '',
+        'This project uses `.codex/ai-rules/` as the shared AI execution framework.',
+        'Before changing files, read `AGENTS.md`, `.codex/ai-rules/AGENTS.md`, and',
+        '`.codex/project/rules/project/AGENTS.md`. Keep this Cursor rule as a thin',
+        'adapter and do not copy long common rules here.'
+    )
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Get-GitHubInstructionsContent {
+    $lines = @(
+        '---',
+        'applyTo: "**"',
+        '---',
+        '',
+        '# AI Rules Instructions',
+        '',
+        'This repository uses `.codex/ai-rules/` as the shared AI execution framework.',
+        'Before working, read `AGENTS.md`, `.codex/ai-rules/AGENTS.md`, and',
+        '`.codex/project/rules/project/AGENTS.md`. Keep this file as a thin adapter',
+        'for GitHub Copilot instructions.'
+    )
+    return ($lines -join [Environment]::NewLine)
+}
+
+function Get-AgentAdapterFiles {
+    return @(
+        [pscustomobject]@{ RelativePath = "CLAUDE.md"; Content = (Get-ClaudeAdapterContent) },
+        [pscustomobject]@{ RelativePath = "GEMINI.md"; Content = (Get-GeminiAdapterContent) },
+        [pscustomobject]@{ RelativePath = ".github\copilot-instructions.md"; Content = (Get-GenericAdapterContent -ToolName "GitHub Copilot") },
+        [pscustomobject]@{ RelativePath = ".github\instructions\ai-rules.instructions.md"; Content = (Get-GitHubInstructionsContent) },
+        [pscustomobject]@{ RelativePath = ".cursor\rules\ai-rules.mdc"; Content = (Get-CursorAdapterContent) },
+        [pscustomobject]@{ RelativePath = ".clinerules\ai-rules.md"; Content = (Get-GenericAdapterContent -ToolName "Cline") },
+        [pscustomobject]@{ RelativePath = ".windsurf\rules\ai-rules.md"; Content = (Get-GenericAdapterContent -ToolName "Windsurf") },
+        [pscustomobject]@{ RelativePath = ".continue\rules\ai-rules.md"; Content = (Get-GenericAdapterContent -ToolName "Continue") },
+        [pscustomobject]@{ RelativePath = ".roo\rules\ai-rules.md"; Content = (Get-GenericAdapterContent -ToolName "Roo Code") },
+        [pscustomobject]@{ RelativePath = "CONVENTIONS.md"; Content = (Get-GenericAdapterContent -ToolName "Aider") }
+    )
 }
 
 function Get-ProjectRulesPlaceholder {
@@ -302,7 +419,7 @@ function Get-ProjectRulesPlaceholder {
         '## Scope',
         '',
         '- This file records only this project''s specific rules.',
-        '- Common AI collaboration rules live in `.codex/ai-rules/AGENTS.md`.',
+        '- Common AI execution workflow rules live in `.codex/ai-rules/AGENTS.md`.',
         '- Do not write project-specific rules back to the common `ai-rules` repo.',
         '- Add local directory, business, documentation, source snapshot, runtime,',
         '  deliverable, and maintenance requirements here or in nearby Markdown files.'
@@ -427,12 +544,23 @@ if (-not $SkipRootEntry) {
         Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot -OnlyIfMissing
     }
 }
+if (-not $SkipAgentAdapters) {
+    foreach ($adapter in Get-AgentAdapterFiles) {
+        if ($ForceAgentAdapters) {
+            Write-GeneratedFile -RelativePath $adapter.RelativePath -Content $adapter.Content -BackupRoot $backupRoot
+        }
+        else {
+            Write-GeneratedFile -RelativePath $adapter.RelativePath -Content $adapter.Content -BackupRoot $backupRoot -OnlyIfMissing
+        }
+    }
+}
 if (-not $SkipProjectPlaceholder) {
     Write-GeneratedFile -RelativePath ".codex\project\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
 }
 
 $configDir = Join-Path $TargetProjectPath ".codex"
 $configSourceRepoUrl = $source
+$agentAdapters = @("AGENTS.md") + ((Get-AgentAdapterFiles) | ForEach-Object { $_.RelativePath.Replace("\", "/") })
 $config = [ordered]@{
     schema_version = 3
     mode = if ($Mode -eq "submodule") { "git-submodule" } else { "nested-git-clone" }
@@ -442,7 +570,16 @@ $config = [ordered]@{
     sourceRepoPath = $RulesRepoPath
     embeddedRepoPath = $EmbedPath.Replace("\", "/")
     commonEntry = ".codex/ai-rules/AGENTS.md"
+    commonEntrySemantics = "agent-neutral workflow source; AGENTS.md is a compatibility filename"
     projectEntry = ".codex/project/rules/project/AGENTS.md"
+    agentEntryAdapters = $agentAdapters
+    adapterPolicy = [ordered]@{
+        generateMissingAdapters = (-not $SkipAgentAdapters)
+        forceAgentAdapters = [bool]$ForceAgentAdapters
+        existingAdapterPolicy = if ($ForceAgentAdapters) { "backup-then-rewrite" } else { "preserve-existing" }
+        adapterContentPolicy = "thin-read-order-sync-boundary-only"
+        canonicalFacts = @(".codex/ai-rules/AGENTS.md", ".codex/project/rules/project/AGENTS.md")
+    }
     syncPolicy = [ordered]@{
         checkEverySession = $true
         fetchIntervalHours = 24
@@ -465,12 +602,13 @@ $config = [ordered]@{
     boundaries = [ordered]@{
         commonRulesSource = ".codex/ai-rules/"
         priorityOrder = @("native-project-assets", "project-specialization", "ai-rules-common")
-        nativeProjectAssets = @("AGENTS.md", ".codex/skills/")
+        nativeProjectAssets = @("AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONVENTIONS.md", ".github/", ".cursor/", ".clinerules/", ".windsurf/", ".continue/", ".roo/", ".codex/skills/")
         nativeProjectWritePolicy = "read-index-report-only unless the user explicitly approves native asset edits"
         projectRulesSource = ".codex/project/rules/project/"
         commonSkillsSource = ".codex/ai-rules/.codex/skills/"
         projectSkillsSource = ".codex/project/skills/"
         rootAgentsPolicy = "project-owned; create-if-missing; rewrite only with -ForceRootEntry"
+        agentAdapterPolicy = "project-owned; create missing adapters unless -SkipAgentAdapters; rewrite only with -ForceAgentAdapters"
         skillConflictPolicy = "native project skill wins, then project specialization, then ai-rules common; duplicate names require review"
         parentTracksEmbeddedCommit = ($Mode -eq "submodule")
     }
@@ -478,6 +616,7 @@ $config = [ordered]@{
         script = "install-ai-rules.ps1"
         planOnly = [bool]$PlanOnly
         rootEntry = if ($SkipRootEntry) { "skipped" } elseif ($ForceRootEntry) { "force-generated-with-backup" } else { "create-if-missing-preserve-existing" }
+        agentAdapters = if ($SkipAgentAdapters) { "skipped" } elseif ($ForceAgentAdapters) { "force-generated-with-backup" } else { "create-if-missing-preserve-existing" }
         projectPlaceholder = if ($SkipProjectPlaceholder) { "skipped" } else { "create-if-missing" }
         existingGitRepoPolicy = if ($AdoptExistingGitRepo) { "adopt-when-requested" } else { "stop-unless-registered-submodule" }
         postInstallSyncCheck = (-not $SkipSyncCheck)
@@ -512,6 +651,9 @@ else {
     Write-Host "Embedded repo: $EmbedPath"
     Write-Host "Common entry: .codex/ai-rules/AGENTS.md"
     Write-Host "Project entry: .codex/project/rules/project/AGENTS.md"
+    if (-not $SkipAgentAdapters) {
+        Write-Host "Agent adapters: $($agentAdapters -join ', ')"
+    }
     if (-not $NoBackup) {
         Write-Host "Changed generated files, if any, were backed up under $backupRoot"
     }

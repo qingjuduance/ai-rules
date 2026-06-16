@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Manage a local file-based communication bus for Codex sub-agents.
+"""Manage a local file-based communication bus for AI sub-agents.
 
 The bus is intentionally simple: UTF-8 JSON files hold group and agent state,
-and JSONL files hold append-only messages. It does not replace Codex built-in
-spawn/send/wait tools; it adds durable inbox/outbox records, acknowledgements,
+and JSONL files hold append-only messages. It does not replace tool-specific
+spawn/send/wait features; it adds durable inbox/outbox records, acknowledgements,
 heartbeats, artifact indexes, and token usage provenance.
 """
 

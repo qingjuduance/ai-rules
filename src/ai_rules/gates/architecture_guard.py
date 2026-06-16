@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the project-local Codex architecture boundaries."""
+"""Validate the project-local AI rules architecture boundaries."""
 
 from __future__ import annotations
 
@@ -38,10 +38,23 @@ REQUIRED_PROJECT_PATHS = [
     PROJECT_RULES_ENTRY,
 ]
 PROJECT_ROOT_AGENTS = Path("AGENTS.md")
-ROOT_AGENT_REQUIRED_MARKERS = (
+ADAPTER_REQUIRED_MARKERS = (
     ".codex/ai-rules/AGENTS.md",
     ".codex/project/rules/project/AGENTS.md",
 )
+NATIVE_RULE_ADAPTERS = [
+    Path("AGENTS.md"),
+    Path("CLAUDE.md"),
+    Path("GEMINI.md"),
+    Path("CONVENTIONS.md"),
+    Path(".github") / "copilot-instructions.md",
+    Path(".github") / "instructions" / "ai-rules.instructions.md",
+    Path(".cursor") / "rules" / "ai-rules.mdc",
+    Path(".clinerules") / "ai-rules.md",
+    Path(".windsurf") / "rules" / "ai-rules.md",
+    Path(".continue") / "rules" / "ai-rules.md",
+    Path(".roo") / "rules" / "ai-rules.md",
+]
 
 
 @dataclass
@@ -52,7 +65,7 @@ class Finding:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check .codex architecture boundaries.")
+    parser = argparse.ArgumentParser(description="Check AI rules architecture boundaries.")
     parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero on warnings.")
@@ -106,17 +119,34 @@ def build_report(root: Path) -> dict[str, object]:
 
     root_agents = root / PROJECT_ROOT_AGENTS
     if not root_agents.exists():
-        errors.append(Finding("error", "project root AGENTS.md is missing", PROJECT_ROOT_AGENTS.as_posix()))
+        errors.append(Finding("error", "project root AGENTS.md adapter is missing", PROJECT_ROOT_AGENTS.as_posix()))
     else:
         text = root_agents.read_text(encoding="utf-8", errors="replace")
-        notes.append(f"root AGENTS entry: {rel(root_agents, root)}")
-        for marker in ROOT_AGENT_REQUIRED_MARKERS:
+        notes.append(f"root AGENTS adapter: {rel(root_agents, root)}")
+        for marker in ADAPTER_REQUIRED_MARKERS:
             if marker not in text:
                 warnings.append(
                     Finding(
                         "warning",
-                        f"project root AGENTS.md lacks required read-order marker: {marker}",
+                        f"project root AGENTS.md adapter lacks required read-order marker: {marker}",
                         PROJECT_ROOT_AGENTS.as_posix(),
+                    )
+                )
+
+    existing_adapters: list[str] = []
+    for adapter in NATIVE_RULE_ADAPTERS:
+        adapter_path = root / adapter
+        if not adapter_path.exists() or adapter == PROJECT_ROOT_AGENTS:
+            continue
+        existing_adapters.append(adapter.as_posix())
+        text = adapter_path.read_text(encoding="utf-8", errors="replace")
+        for marker in ADAPTER_REQUIRED_MARKERS:
+            if marker not in text:
+                warnings.append(
+                    Finding(
+                        "warning",
+                        f"native AI rule adapter lacks required read-order marker: {marker}",
+                        adapter.as_posix(),
                     )
                 )
 
@@ -197,6 +227,8 @@ def build_report(root: Path) -> dict[str, object]:
         "warnings": [asdict(item) for item in warnings],
         "notes": notes,
         "priority_order": ["native-project-assets", "project-specialization", "ai-rules-common"],
+        "native_rule_adapters": [path.as_posix() for path in NATIVE_RULE_ADAPTERS],
+        "existing_native_rule_adapters": existing_adapters,
         "native_project_skill_names": native_skill_names,
         "project_skill_names": project_skill_names,
         "ai_rules_skill_names": ai_rules_skill_names,
@@ -213,9 +245,10 @@ def render_text(report: dict[str, object]) -> str:
     errors = report["errors"]
     warnings = report["warnings"]
     lines = [
-        "Codex Architecture Guard",
+        "AI Rules Architecture Guard",
         f"Root: {report['root']}",
         "Priority: " + " > ".join(report["priority_order"]),
+        "Native rule adapters: " + ", ".join(report["existing_native_rule_adapters"]),
         "Allowed .codex top: " + ", ".join(report["allowed_codex_top"]),
         "Actual .codex top: " + ", ".join(report["codex_top"]),
         f"Errors: {len(errors)}",

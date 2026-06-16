@@ -179,7 +179,7 @@ TEMPLATES: dict[str, str] = {
 
 -
 
-## 是否需要升级到 AGENTS.md
+## 是否需要升级到规则/脚本/adapter
 
 -
 

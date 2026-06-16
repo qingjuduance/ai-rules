@@ -1,6 +1,6 @@
 {
   "name": "ai-rules",
-  "description": "Reusable common Codex/AI collaboration rules embedded as a complete Git repository.",
+  "description": "Reusable agent-neutral AI execution workflow framework embedded as a complete Git repository.",
   "schema_version": 3,
   "distributionMode": "embedded-git-repository",
   "recommendedEmbed": {
@@ -12,8 +12,93 @@
   "rulesLayout": {
     "rootEntryTarget": "AGENTS.md",
     "commonEntry": ".codex/ai-rules/AGENTS.md",
-    "projectEntry": ".codex/project/rules/project/AGENTS.md"
+    "commonEntrySemantics": "canonical agent-neutral workflow source; AGENTS.md is a compatibility filename",
+    "projectEntry": ".codex/project/rules/project/AGENTS.md",
+    "adapterStrategy": "thin-native-entrypoints-import-or-point-to-common-and-project-facts"
   },
+  "agentEntryAdapters": [
+    {
+      "tool": "codex-agents-ecosystem",
+      "paths": [
+        "AGENTS.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceRootEntry"
+    },
+    {
+      "tool": "claude-code",
+      "paths": [
+        "CLAUDE.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "gemini-cli",
+      "paths": [
+        "GEMINI.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "github-copilot",
+      "paths": [
+        ".github/copilot-instructions.md",
+        ".github/instructions/ai-rules.instructions.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "cursor",
+      "paths": [
+        ".cursor/rules/ai-rules.mdc"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "cline",
+      "paths": [
+        ".clinerules/ai-rules.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "windsurf",
+      "paths": [
+        ".windsurf/rules/ai-rules.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "continue",
+      "paths": [
+        ".continue/rules/ai-rules.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "roo-code",
+      "paths": [
+        ".roo/rules/ai-rules.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "aider",
+      "paths": [
+        "CONVENTIONS.md"
+      ],
+      "defaultGenerated": true,
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    }
+  ],
   "syncPolicy": {
     "checkEverySession": true,
     "fetchIntervalHours": 24,
@@ -50,6 +135,7 @@
       "ai-rules-common"
     ],
     "rootAgents": "native-project-owned",
+    "nativeRuleAdapters": "native-project-owned",
     "nativeProjectSkills": "native-project-owned",
     "projectRules": "project-specialization-owned",
     "projectSkills": "project-specialization-owned",
@@ -61,6 +147,7 @@
   },
   "repoContents": {
     "commonRules": "AGENTS.md",
+    "commonRulesSemantics": "agent-neutral workflow source exposed through AGENTS.md compatibility adapter",
     "pythonPackage": "src/ai_rules",
     "skills": [
       ".codex/skills/agents-rule-maintainer",
@@ -75,6 +162,16 @@
   },
   "targetProjectGeneratedFiles": [
     "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CONVENTIONS.md",
+    ".github/copilot-instructions.md",
+    ".github/instructions/ai-rules.instructions.md",
+    ".cursor/rules/ai-rules.mdc",
+    ".clinerules/ai-rules.md",
+    ".windsurf/rules/ai-rules.md",
+    ".continue/rules/ai-rules.md",
+    ".roo/rules/ai-rules.md",
     ".codex/ai-rules-config.json",
     ".codex/project/rules/project/AGENTS.md"
   ],
@@ -90,6 +187,7 @@
     "supportsRelativeLocalPathSubmoduleSource": true,
     "existingFilesPolicy": {
       "rootAgents": "create-only-when-missing; rewrite-only-with-ForceRootEntry",
+      "agentAdapters": "create-only-when-missing; rewrite-only-with-ForceAgentAdapters; skip-with-SkipAgentAdapters",
       "config": "backup-then-rewrite",
       "projectRules": "create-only-when-missing",
       "nativeProjectSkills": "preserve-existing; never-modify-without-explicit-user-approval",
@@ -110,6 +208,17 @@
     }
   },
   "targetProjectPreservedPaths": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CONVENTIONS.md",
+    ".github/copilot-instructions.md",
+    ".github/instructions/",
+    ".cursor/rules/",
+    ".clinerules/",
+    ".windsurf/rules/",
+    ".continue/rules/",
+    ".roo/rules/",
     ".codex/project/rules/project/",
     ".codex/project/skills/",
     ".codex/project/records/task-tracking/",
@@ -135,6 +244,22 @@
     ".codex/project-status/"
   ],
   "legacyPathPolicy": "do-not-generate; report-and-migrate-forward-when-in-current-scope",
+  "adapterPolicy": {
+    "defaultGenerateMissingAdapters": true,
+    "skipParameter": "SkipAgentAdapters",
+    "forceParameter": "ForceAgentAdapters",
+    "existingAdapterPolicy": "preserve-and-report",
+    "adapterContentPolicy": "thin-read-order-sync-boundary-only",
+    "canonicalFacts": [
+      ".codex/ai-rules/AGENTS.md",
+      ".codex/project/rules/project/AGENTS.md"
+    ],
+    "priorityOrder": [
+      "native-project-assets",
+      "project-specialization",
+      "ai-rules-common"
+    ]
+  },
   "githubReadmeGate": {
     "beforePush": true,
     "requireCurrentAdvantages": true,

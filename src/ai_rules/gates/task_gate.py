@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only gate for task-type specific Codex evidence.
+"""Read-only gate for task-type specific AI rules evidence.
 
 The session gate checks whether work can close at all. This script checks
 whether the selected task type recorded the evidence that makes closure
@@ -248,7 +248,7 @@ class Report:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Check task-type specific evidence in a Codex task tracking file."
+        description="Check task-type specific evidence in an AI rules task tracking file."
     )
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument("--task-tracking", help="Task tracking file to check.")
@@ -1332,7 +1332,7 @@ def format_findings(title: str, items: list[Finding]) -> list[str]:
 
 def format_text(report: Report) -> str:
     lines = [
-        "Codex Task Gate Report",
+        "AI Rules Task Gate Report",
         f"Root: {report.root}",
         f"Task tracking: {report.task_tracking or 'none'}",
         f"Task types: {', '.join(report.task_types) if report.task_types else 'none'}",

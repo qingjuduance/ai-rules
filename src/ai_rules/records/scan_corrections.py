@@ -116,7 +116,9 @@ def parse_record(path: Path, root: Path) -> CorrectionRecord:
 
     error_section = section_text(text, "错误类型")
     status_section = section_text(text, "当前状态")
-    upgrade_section = section_text(text, "是否需要升级到 AGENTS.md")
+    upgrade_section = section_text(text, "是否需要升级到规则/脚本/adapter") or section_text(
+        text, "是否需要升级到 AGENTS.md"
+    )
     tracking_section = section_text(text, "关联 task tracking")
 
     error_type = first_bullet_value(error_section, "类型")
