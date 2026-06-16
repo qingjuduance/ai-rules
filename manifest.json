@@ -1,32 +1,32 @@
 {
-  "name": "ai-rules",
+  "name": "ai-client-governance",
   "description": "Reusable agent-neutral governance plugin layer for AI coding clients, embedded as a complete Git repository.",
   "schema_version": 3,
   "distributionMode": "embedded-git-repository",
   "recommendedEmbed": {
-    "targetPath": ".codex/ai-rules",
+    "targetPath": ".codex/ai-client-governance",
     "defaultMethod": "git-submodule",
     "preferredMethod": "git-submodule",
     "fallbackMethod": "nested-git-clone"
   },
   "rulesLayout": {
     "rootEntryTarget": "AGENTS.md",
-    "commonEntry": ".codex/ai-rules/AGENTS.md",
+    "commonEntry": ".codex/ai-client-governance/AGENTS.md",
     "commonEntrySemantics": "canonical agent-neutral governance contract; AGENTS.md is a compatibility filename",
     "projectEntry": ".codex/project/rules/project/AGENTS.md",
     "adapterStrategy": "thin-native-entrypoints-import-or-point-to-common-and-project-facts"
   },
   "runtimeArchitecture": {
-    "name": "ai-rules-client-governance-plugin",
-    "concept": "Spring-style governance plugin layer for AI coding clients. It assumes the host client provides conversation, tool execution, file writes, shell commands, approvals, and session recovery; ai-rules governs how those capabilities are used.",
-    "hostClientAssumption": "Codex, Claude Code, Cursor, Cline, Windsurf, Continue, and similar clients already provide the agent runtime surface. ai-rules supplies policy, gates, evidence, and state audits on top of that surface.",
+    "name": "ai-client-governance-plugin",
+    "concept": "Spring-style governance plugin layer for AI coding clients. It assumes the host client provides conversation, tool execution, file writes, shell commands, approvals, and session recovery; AI Client Governance governs how those capabilities are used.",
+    "hostClientAssumption": "Codex, Claude Code, Cursor, Cline, Windsurf, Continue, and similar clients already provide the agent runtime surface. AI Client Governance supplies policy, gates, evidence, and state audits on top of that surface.",
     "notAReplacementFor": [
       "host AI coding client",
       "agent runtime",
       "LangGraph workflow engine unless using a self-built runner"
     ],
     "coreContext": "AgentExecutionContext",
-    "registryCommand": "python .codex/ai-rules/scripts/ai_rules.py runtime components",
+    "registryCommand": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components",
     "componentKinds": [
       "input-filter",
       "processing-interceptor",
@@ -70,12 +70,12 @@
       "trackingEvidence": "record affected docs and references, updated files, or explicit no-impact rationale"
     },
     "executionGuarantees": {
-      "componentVisibility": "python .codex/ai-rules/scripts/ai_rules.py runtime components must show matching nodes for the task context",
-      "gateExecution": "python .codex/ai-rules/scripts/ai_rules.py gate-pool --dry-run must show executable gate steps before final runs",
+      "componentVisibility": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components must show matching nodes for the task context",
+      "gateExecution": "python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show executable gate steps before final runs",
       "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
-      "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-rules worktree, host closeout must verify and commit the .codex/ai-rules gitlink, worktrees.json, and related task tracking",
+      "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .codex/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"
     },
@@ -93,11 +93,11 @@
       "state-audit"
     ],
     "runtimeCommands": {
-      "components": "python .codex/ai-rules/scripts/ai_rules.py runtime components",
-      "gatePool": "python .codex/ai-rules/scripts/ai_rules.py gate-pool",
-      "completionTest": "python .codex/ai-rules/scripts/ai_rules.py completion-test",
-      "worktreeReconcile": "python .codex/ai-rules/scripts/ai_rules.py worktree-task reconcile --strict",
-      "hostCloseout": "python .codex/ai-rules/scripts/ai_rules.py worktree-task host-closeout --repo ai-rules --require-task-tracking --require-clean-host"
+      "components": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components",
+      "gatePool": "python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool",
+      "completionTest": "python .codex/ai-client-governance/scripts/ai_client_governance.py completion-test",
+      "worktreeReconcile": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task reconcile --strict",
+      "hostCloseout": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout --repo ai-client-governance --require-task-tracking --require-clean-host"
     }
   },
   "agentEntryAdapters": [
@@ -129,7 +129,7 @@
       "tool": "github-copilot",
       "paths": [
         ".github/copilot-instructions.md",
-        ".github/instructions/ai-rules.instructions.md"
+        ".github/instructions/ai-client-governance.instructions.md"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -137,7 +137,7 @@
     {
       "tool": "cursor",
       "paths": [
-        ".cursor/rules/ai-rules.mdc"
+        ".cursor/rules/ai-client-governance.mdc"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -145,7 +145,7 @@
     {
       "tool": "cline",
       "paths": [
-        ".clinerules/ai-rules.md"
+        ".clinerules/ai-client-governance.md"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -153,7 +153,7 @@
     {
       "tool": "windsurf",
       "paths": [
-        ".windsurf/rules/ai-rules.md"
+        ".windsurf/rules/ai-client-governance.md"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -161,7 +161,7 @@
     {
       "tool": "continue",
       "paths": [
-        ".continue/rules/ai-rules.md"
+        ".continue/rules/ai-client-governance.md"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -169,7 +169,7 @@
     {
       "tool": "roo-code",
       "paths": [
-        ".roo/rules/ai-rules.md"
+        ".roo/rules/ai-client-governance.md"
       ],
       "defaultGenerated": true,
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
@@ -199,7 +199,7 @@
   },
   "writeback": {
     "method": "git-commands-inside-embedded-repo",
-    "workingDirectory": ".codex/ai-rules",
+    "workingDirectory": ".codex/ai-client-governance",
     "requireUserApprovalForPush": true,
     "forbiddenSources": [
       ".codex/project/rules/project/",
@@ -216,33 +216,33 @@
     "priorityOrder": [
       "native-project-assets",
       "project-specialization",
-      "ai-rules-common"
+      "ai-client-governance-common"
     ],
     "rootAgents": "native-project-owned",
     "nativeRuleAdapters": "native-project-owned",
     "nativeProjectSkills": "native-project-owned",
     "projectRules": "project-specialization-owned",
     "projectSkills": "project-specialization-owned",
-    "commonRules": "ai-rules-owned",
-    "commonSkills": "ai-rules-owned",
+    "commonRules": "ai-client-governance-owned",
+    "commonSkills": "ai-client-governance-owned",
     "existingProjectContentPolicy": "preserve-and-report",
-    "skillConflictPolicy": "prefer-native-then-project-then-ai-rules-and-report-duplicate",
+    "skillConflictPolicy": "prefer-native-then-project-then-ai-client-governance-and-report-duplicate",
     "nativeProjectContentWritePolicy": "read-index-report-only-unless-user-explicitly-approves"
   },
   "repoContents": {
     "commonRules": "AGENTS.md",
     "commonRulesSemantics": "agent-neutral governance contract exposed through AGENTS.md compatibility adapter",
-    "pythonPackage": "src/ai_rules",
-    "runtime": "src/ai_rules/runtime",
+    "pythonPackage": "src/ai_client_governance",
+    "runtime": "src/ai_client_governance/runtime",
     "skills": [
       ".codex/skills/agents-rule-maintainer",
       ".codex/skills/codex-token-usage",
       ".codex/skills/self-correction-planner"
     ],
     "scripts": [
-      "scripts/ai_rules.py",
-      "check-ai-rules-sync.ps1",
-      "install-ai-rules.ps1"
+      "scripts/ai_client_governance.py",
+      "check-ai-client-governance-sync.ps1",
+      "install-ai-client-governance.ps1"
     ]
   },
   "targetProjectGeneratedFiles": [
@@ -251,17 +251,17 @@
     "GEMINI.md",
     "CONVENTIONS.md",
     ".github/copilot-instructions.md",
-    ".github/instructions/ai-rules.instructions.md",
-    ".cursor/rules/ai-rules.mdc",
-    ".clinerules/ai-rules.md",
-    ".windsurf/rules/ai-rules.md",
-    ".continue/rules/ai-rules.md",
-    ".roo/rules/ai-rules.md",
-    ".codex/ai-rules-config.json",
+    ".github/instructions/ai-client-governance.instructions.md",
+    ".cursor/rules/ai-client-governance.mdc",
+    ".clinerules/ai-client-governance.md",
+    ".windsurf/rules/ai-client-governance.md",
+    ".continue/rules/ai-client-governance.md",
+    ".roo/rules/ai-client-governance.md",
+    ".codex/ai-client-governance-config.json",
     ".codex/project/rules/project/AGENTS.md"
   ],
   "installer": {
-    "script": "install-ai-rules.ps1",
+    "script": "install-ai-client-governance.ps1",
     "defaultMode": "git-submodule",
     "fallbackMode": "nested-git-clone",
     "supportsPlanOnly": true,
@@ -283,7 +283,7 @@
     },
     "postInstallSyncCheck": {
       "default": true,
-      "command": ".codex/ai-rules/check-ai-rules-sync.ps1 -NoFetch",
+      "command": ".codex/ai-client-governance/check-ai-client-governance-sync.ps1 -NoFetch",
       "skipParameter": "SkipSyncCheck"
     },
     "gitBoundary": {
@@ -336,13 +336,13 @@
     "existingAdapterPolicy": "preserve-and-report",
     "adapterContentPolicy": "thin-read-order-sync-boundary-only",
     "canonicalFacts": [
-      ".codex/ai-rules/AGENTS.md",
+      ".codex/ai-client-governance/AGENTS.md",
       ".codex/project/rules/project/AGENTS.md"
     ],
     "priorityOrder": [
       "native-project-assets",
       "project-specialization",
-      "ai-rules-common"
+      "ai-client-governance-common"
     ]
   },
   "githubReadmeGate": {
