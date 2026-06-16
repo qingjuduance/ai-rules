@@ -18,12 +18,33 @@ from typing import Any
 
 from ai_rules.worktree.coord import current_branch, current_head, detect_repo, git_text, safe_id
 
+DEFAULT_SELF_EXCLUDES = (".source-projects",)
+
 
 def git_run(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     """Run a git command."""
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=check,
+    )
+
+
+def git_run_input(
+    args: list[str],
+    cwd: Path,
+    input_text: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a git command with UTF-8 stdin."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        input=input_text,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -147,6 +168,50 @@ def clean_branch_name(value: str) -> str:
 def task_worktree_path(project_root: Path, task_slug: str) -> Path:
     """Return the fixed path for a task worktree."""
     return project_root / ".codex" / "project" / ".worktree" / task_slug
+
+
+def normalize_repo_path(value: str) -> str:
+    """Normalize and validate a repository-relative path."""
+    raw = value.replace("\\", "/").strip()
+    if raw.startswith("/") or raw.startswith("//") or (len(raw) >= 2 and raw[1] == ":") or Path(value).is_absolute():
+        raise ValueError(f"exclude path must be repository-relative: {value}")
+    normalized = raw.strip("/")
+    if not normalized or normalized == ".":
+        raise ValueError("exclude path cannot be empty")
+    if normalized.startswith("../") or "/../" in normalized or normalized == "..":
+        raise ValueError(f"exclude path must stay inside the repository: {value}")
+    if normalized == ".git" or normalized.startswith(".git/"):
+        raise ValueError(f"exclude path cannot target Git metadata: {value}")
+    return normalized
+
+
+def sparse_excludes_for_create(args: argparse.Namespace, source_repo: Path) -> list[str]:
+    """Return repository-relative paths excluded from a new worktree."""
+    raw_paths: list[str] = []
+    if args.repo == "self" and not args.include_source_projects:
+        for path in DEFAULT_SELF_EXCLUDES:
+            if (source_repo / path).exists():
+                raw_paths.append(path)
+    raw_paths.extend(args.exclude_path or [])
+
+    excludes: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        normalized = normalize_repo_path(raw)
+        if normalized not in seen:
+            excludes.append(normalized)
+            seen.add(normalized)
+    return excludes
+
+
+def sparse_patterns_for_excludes(excludes: list[str]) -> str:
+    """Build non-cone sparse-checkout patterns that include all except excludes."""
+    lines = ["/*"]
+    for path in excludes:
+        lines.append(f"!/{path}")
+        lines.append(f"!/{path}/")
+        lines.append(f"!/{path}/**")
+    return "\n".join(lines) + "\n"
 
 
 def ai_rules_script() -> Path:
@@ -419,12 +484,20 @@ def command_create(args: argparse.Namespace) -> int:
         print(f"Error: branch '{branch_name}' already exists", file=sys.stderr)
         return 1
 
+    try:
+        sparse_excludes = sparse_excludes_for_create(args, source_repo)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     if args.dry_run:
         print(f"[dry-run] Would create worktree:")
         print(f"  source_repo: {source_repo}")
         print(f"  worktree_path: {worktree_path}")
         print(f"  branch: {branch_name}")
         print(f"  base: {args.base or 'HEAD'}")
+        if sparse_excludes:
+            print(f"  sparse_checkout_excludes: {', '.join(sparse_excludes)}")
         return 0
 
     # Create parent directory
@@ -432,6 +505,8 @@ def command_create(args: argparse.Namespace) -> int:
 
     # Create worktree
     git_args = ["worktree", "add", "-b", branch_name]
+    if sparse_excludes:
+        git_args.append("--no-checkout")
     if args.git_lock:
         git_args.extend(["--lock", "--reason", args.git_lock_reason or f"AI rules task {task_slug}"])
     git_args.append(str(worktree_path))
@@ -442,6 +517,22 @@ def command_create(args: argparse.Namespace) -> int:
     if result.returncode != 0:
         print(f"Error creating worktree:\n{result.stderr}", file=sys.stderr)
         return 1
+
+    if sparse_excludes:
+        patterns = sparse_patterns_for_excludes(sparse_excludes)
+        sparse_result = git_run_input(
+            ["sparse-checkout", "set", "--no-cone", "--stdin"],
+            worktree_path,
+            patterns,
+            check=False,
+        )
+        if sparse_result.returncode != 0:
+            print(f"Error configuring sparse checkout:\n{sparse_result.stderr}", file=sys.stderr)
+            return 1
+        checkout_result = git_run(["checkout", "-q"], worktree_path, check=False)
+        if checkout_result.returncode != 0:
+            print(f"Error checking out sparse worktree:\n{checkout_result.stderr}", file=sys.stderr)
+            return 1
 
     if args.register_session:
         session_id = args.session_id or safe_id("S")
@@ -509,6 +600,8 @@ def command_create(args: argparse.Namespace) -> int:
     print(f"| 分支 | {branch_name} |")
     print(f"| 基准提交 | {head_commit[:7]} {head_log} |")
     print(f"| git status | clean (newly created) |")
+    if sparse_excludes:
+        print(f"| sparse checkout 排除 | {', '.join(sparse_excludes)} |")
     
     return 0
 
@@ -877,6 +970,16 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--lock-reason", help="Reason recorded on coord locks.")
     create.add_argument("--git-lock", action="store_true", help="Create the git worktree locked.")
     create.add_argument("--git-lock-reason", help="Reason passed to git worktree add --lock.")
+    create.add_argument(
+        "--include-source-projects",
+        action="store_true",
+        help="For --repo self, include .source-projects instead of excluding it by default.",
+    )
+    create.add_argument(
+        "--exclude-path",
+        action="append",
+        help="Repository-relative path to exclude from the new worktree with sparse-checkout. Repeatable.",
+    )
     create.add_argument("--dry-run", action="store_true", help="Show what would be created.")
     
     # status

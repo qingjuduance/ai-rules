@@ -443,6 +443,12 @@ python .codex\ai-rules\scripts\ai_rules.py worktree-task close --repo ai-rules -
 python .codex\ai-rules\scripts\ai_rules.py worktree-task remove --repo ai-rules --task-slug worktree-task-script
 ```
 
+创建 `self` 仓库任务 worktree 时，脚本默认用 sparse-checkout 排除
+`.source-projects/`，因为源码快照通常只在学习、简历证据或源码排查任务中才需要。
+确实需要完整源码快照时，显式加 `--include-source-projects`；如果还要排除其它大目录，
+可以重复传 `--exclude-path <repo-relative-path>`。这些排除只影响新建的任务
+worktree，不删除主工作区文件，也不改变 Git 历史。
+
 `status --write-state` 会生成或更新 `.codex/project/state/worktrees.json`，记录 self 和
 ai-rules 两个仓库下每个任务 worktree 的路径、分支、`head_at_snapshot`、dirty 状态和
 是否已合并到目标分支。这个文件是可提交的审计快照，不是免运行的实时数据库；提交快照
