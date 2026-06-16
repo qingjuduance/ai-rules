@@ -130,6 +130,15 @@ def find_worktree_by_branch(worktrees: list[dict[str, str]], branch: str) -> dic
     return None
 
 
+def find_worktree_by_path(worktrees: list[dict[str, str]], path: Path) -> dict[str, str] | None:
+    """Find a worktree by absolute path."""
+    resolved = path.resolve()
+    for wt in worktrees:
+        if Path(wt.get("worktree", "")).resolve() == resolved:
+            return wt
+    return None
+
+
 def clean_branch_name(value: str) -> str:
     """Normalize a porcelain branch ref into a short branch name."""
     return value.removeprefix("refs/heads/")
@@ -156,6 +165,36 @@ def merged_to_target(cwd: Path, branch: str, target_ref: str) -> bool | None:
         return None
     result = git_run(["merge-base", "--is-ancestor", branch, target_ref], cwd, check=False)
     return result.returncode == 0
+
+
+def merge_base(cwd: Path, left: str, right: str = "HEAD") -> str:
+    """Return merge-base for two refs, or an empty string if unavailable."""
+    return git_text(["merge-base", left, right], cwd, allow_fail=True)
+
+
+def changed_files_since(cwd: Path, base_ref: str, head_ref: str = "HEAD") -> list[str]:
+    """Return changed file names between base and head."""
+    if not base_ref:
+        return []
+    result = git_run(["diff", "--name-only", f"{base_ref}..{head_ref}"], cwd, check=False)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def task_worktree_context(project_root: Path, repo: str, task_slug: str) -> tuple[Path, Path, dict[str, str], str]:
+    """Resolve common task worktree context."""
+    source_repo = source_repo_for(project_root, repo)
+    worktree_path = task_worktree_path(project_root, task_slug)
+    if not worktree_path.exists():
+        raise SystemExit(f"Error: worktree not found: {worktree_path}")
+    wt = find_worktree_by_path(parse_worktree_list(source_repo), worktree_path)
+    if not wt:
+        raise SystemExit(f"Error: worktree not registered: {worktree_path}")
+    branch = clean_branch_name(wt.get("branch", ""))
+    if not branch:
+        raise SystemExit(f"Error: worktree branch not found: {worktree_path}")
+    return source_repo, worktree_path, wt, branch
 
 
 def status_path_from_line(line: str) -> str:
@@ -244,7 +283,7 @@ def build_status_snapshot(
     ]
     worktree_base = project_root / ".codex" / "project" / ".worktree"
     snapshot: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "last_updated": now_iso(),
         "project_root": str(project_root.resolve()),
         "core_principle": "一切流程化 + 可审计",
@@ -260,6 +299,10 @@ def build_status_snapshot(
             "require_commit_before_merge": True,
             "require_state_snapshot_before_closeout": True,
             "require_live_status_rerun_before_final_reply": True,
+            "queue_before_merge_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task queue",
+            "merge_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task merge --execute",
+            "pre_finalize_gate_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task finalize",
+            "branch_cleanup_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task cleanup-branch --execute",
         },
     }
 
@@ -495,18 +538,10 @@ def command_close(args: argparse.Namespace) -> int:
     """Check worktree closeout status."""
     task_slug = args.task_slug
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    worktree_path = task_worktree_path(repo_root, task_slug)
-
-    if not worktree_path.exists():
-        print(f"Error: worktree not found: {worktree_path}", file=sys.stderr)
-        return 1
-
-    source_repo = source_repo_for(repo_root, args.repo)
-
-    worktrees = parse_worktree_list(source_repo)
-    wt = next((w for w in worktrees if Path(w["worktree"]).resolve() == worktree_path.resolve()), None)
-    if not wt:
-        print(f"Error: worktree not registered: {worktree_path}", file=sys.stderr)
+    try:
+        source_repo, worktree_path, wt, _branch = task_worktree_context(repo_root, args.repo, task_slug)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
         return 1
 
     head = wt.get("head", "")
@@ -562,6 +597,213 @@ def command_close(args: argparse.Namespace) -> int:
 
     if is_dirty:
         return 1
+    return 0
+
+
+def command_queue(args: argparse.Namespace) -> int:
+    """Add a task worktree branch to the integration queue."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    try:
+        _source_repo, worktree_path, _wt, branch = task_worktree_context(repo_root, args.repo, args.task_slug)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    base = merge_base(worktree_path, args.target_ref, "HEAD")
+    head = current_head(worktree_path)
+    files = args.file or changed_files_since(worktree_path, base, "HEAD")
+    summary = args.summary or f"Merge {branch} into {args.target_ref}"
+    queue_cmd = [
+        sys.executable,
+        str(ai_rules_script()),
+        "worktree-coord",
+        "queue",
+        "add",
+        "--branch",
+        branch,
+        "--base",
+        base,
+        "--head",
+        head,
+        "--summary",
+        summary,
+    ]
+    if args.item_id:
+        queue_cmd.extend(["--item-id", args.item_id])
+    if args.session_id:
+        queue_cmd.extend(["--session-id", args.session_id])
+    if args.task_tracking:
+        queue_cmd.extend(["--task-tracking", args.task_tracking])
+    for file_name in files:
+        queue_cmd.extend(["--file", file_name])
+
+    result = run_command(queue_cmd, worktree_path, check=False)
+    if result.returncode != 0:
+        print(result.stderr or result.stdout, file=sys.stderr)
+        return result.returncode
+    print(result.stdout.strip())
+    return 0
+
+
+def command_merge(args: argparse.Namespace) -> int:
+    """Merge a clean task worktree branch into its target branch."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    try:
+        source_repo, worktree_path, _wt, branch = task_worktree_context(repo_root, args.repo, args.task_slug)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    worktree_status = short_status(worktree_path)
+    if worktree_status:
+        print("Error: task worktree is dirty; commit inside the task worktree before merging.", file=sys.stderr)
+        print(worktree_status, file=sys.stderr)
+        return 1
+
+    source_status = short_status(source_repo)
+    if source_status:
+        print("Error: source repository worktree is dirty; merge requires a clean target worktree.", file=sys.stderr)
+        print(source_status, file=sys.stderr)
+        return 1
+
+    current_target_branch = current_branch(source_repo)
+    if current_target_branch != args.target_ref:
+        print(
+            f"Error: source repository must be checked out on {args.target_ref}; current branch is {current_target_branch}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    merged = merged_to_target(source_repo, branch, args.target_ref)
+    if merged is True:
+        print(f"Branch already merged: {branch} -> {args.target_ref}")
+        return 0
+    if merged is None:
+        print(f"Error: target ref not found: {args.target_ref}", file=sys.stderr)
+        return 1
+
+    message = args.message or f"merge: {args.task_slug}"
+    merge_cmd = ["merge", "--no-ff", branch, "-m", message]
+    if not args.execute:
+        print("[dry-run] Would merge task worktree branch:")
+        print(f"  source_repo: {source_repo}")
+        print(f"  target_ref: {args.target_ref}")
+        print(f"  branch: {branch}")
+        print(f"  command: git {' '.join(merge_cmd)}")
+        return 0
+
+    result = git_run(merge_cmd, source_repo, check=False)
+    if result.returncode != 0:
+        print("Error: merge failed.", file=sys.stderr)
+        if result.stdout:
+            print(result.stdout, file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return result.returncode
+
+    print(result.stdout.strip())
+    print(f"Merged {branch} into {args.target_ref}")
+
+    if args.queue_item:
+        mark_cmd = [
+            sys.executable,
+            str(ai_rules_script()),
+            "worktree-coord",
+            "queue",
+            "mark",
+            "--item-id",
+            args.queue_item,
+            "--status",
+            "done",
+            "--validation",
+            f"merged {branch} into {args.target_ref}",
+        ]
+        mark_result = run_command(mark_cmd, worktree_path, check=False)
+        if mark_result.returncode != 0:
+            print(f"Warning: merge succeeded but queue mark failed:\n{mark_result.stderr or mark_result.stdout}", file=sys.stderr)
+            return mark_result.returncode
+        print(mark_result.stdout.strip())
+
+    return 0
+
+
+def command_finalize(args: argparse.Namespace) -> int:
+    """Run a live worktree status gate before final output or closeout."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
+    ignored_paths = {output.resolve()} if output else set()
+    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
+    if output is not None:
+        snapshot["state_file"] = display_path(output, repo_root)
+        write_status_snapshot(output, snapshot)
+
+    issues: list[str] = []
+    total_task_worktrees = 0
+    dirty_task_worktrees = 0
+    unmerged_task_worktrees = 0
+    for repo_name in ("self", "ai-rules"):
+        repo_record = snapshot.get(repo_name)
+        if not isinstance(repo_record, dict):
+            continue
+        for wt in repo_record.get("task_worktrees", []):
+            total_task_worktrees += 1
+            label = f"{repo_name}:{wt.get('task_slug')}"
+            if wt.get("dirty"):
+                dirty_task_worktrees += 1
+                issues.append(f"{label} is dirty")
+            if args.require_merged and wt.get("merged_to_target") is not True:
+                unmerged_task_worktrees += 1
+                issues.append(f"{label} is not merged to {wt.get('target_ref')}")
+    if args.require_no_task_worktrees and total_task_worktrees:
+        issues.append(f"task worktrees still exist: {total_task_worktrees}")
+
+    if args.format == "json":
+        print(json.dumps({"snapshot": snapshot, "issues": issues}, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        if output is not None:
+            print(f"Wrote worktree state: {output}")
+        print("Worktree finalize gate:")
+        print(f"  task_worktrees: {total_task_worktrees}")
+        print(f"  dirty_task_worktrees: {dirty_task_worktrees}")
+        print(f"  unmerged_task_worktrees: {unmerged_task_worktrees}")
+        if issues:
+            print("  issues:")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("  issues: none")
+
+    return 1 if issues else 0
+
+
+def command_cleanup_branch(args: argparse.Namespace) -> int:
+    """Delete a branch only after it has merged and has no mounted worktree."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    source_repo = source_repo_for(repo_root, args.repo)
+    branch = args.branch or f"codex/{args.task_slug}"
+    if not ref_exists(source_repo, f"refs/heads/{branch}"):
+        print(f"Error: branch not found: {branch}", file=sys.stderr)
+        return 1
+    if find_worktree_by_branch(parse_worktree_list(source_repo), branch):
+        print(f"Error: branch still has a worktree; remove the worktree before deleting branch: {branch}", file=sys.stderr)
+        return 1
+    merged = merged_to_target(source_repo, branch, args.target_ref)
+    if merged is not True:
+        print(f"Error: refusing to delete unmerged branch: {branch}", file=sys.stderr)
+        return 1
+    delete_cmd = ["branch", "-d", branch]
+    if not args.execute:
+        print("[dry-run] Would delete merged branch:")
+        print(f"  source_repo: {source_repo}")
+        print(f"  branch: {branch}")
+        print(f"  target_ref: {args.target_ref}")
+        print(f"  command: git {' '.join(delete_cmd)}")
+        return 0
+    result = git_run(delete_cmd, source_repo, check=False)
+    if result.returncode != 0:
+        print(result.stderr or result.stdout, file=sys.stderr)
+        return result.returncode
+    print(result.stdout.strip())
     return 0
 
 
@@ -658,6 +900,51 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--target-ref", default="main", help="Target ref for merge check.")
     close.add_argument("--session-id", help="Close this worktree-coord session after checks.")
     close.add_argument("--keep-locks", action="store_true", help="Keep locks when closing the session.")
+
+    # queue
+    queue = subparsers.add_parser("queue", help="Add a task worktree branch to the integration queue.")
+    queue.add_argument("--project-root", help="Host project root containing .codex/project.")
+    queue.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
+    queue.add_argument("--repo", choices=["self", "ai-rules"], default="self", help="Source repository.")
+    queue.add_argument("--target-ref", default="main", help="Target ref used to compute changed files.")
+    queue.add_argument("--item-id", help="Explicit integration queue item id.")
+    queue.add_argument("--session-id", help="Owning worktree-coord session id.")
+    queue.add_argument("--summary", help="Queue item summary.")
+    queue.add_argument("--task-tracking", help="Task tracking file path.")
+    queue.add_argument("--file", action="append", help="Changed file to record; default is diff from target merge-base.")
+
+    # merge
+    merge = subparsers.add_parser("merge", help="Merge a clean task worktree branch into its target branch.")
+    merge.add_argument("--project-root", help="Host project root containing .codex/project.")
+    merge.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
+    merge.add_argument("--repo", choices=["self", "ai-rules"], default="self", help="Source repository.")
+    merge.add_argument("--target-ref", default="main", help="Target branch currently checked out in the source repo.")
+    merge.add_argument("--message", help="Merge commit message. Default: merge: <task-slug>.")
+    merge.add_argument("--queue-item", help="Mark this integration queue item done after a successful merge.")
+    merge.add_argument("--execute", action="store_true", help="Actually run git merge. Default is dry-run.")
+
+    # finalize
+    finalize = subparsers.add_parser("finalize", help="Run a live worktree status gate before final output.")
+    finalize.add_argument("--project-root", help="Host project root containing .codex/project.")
+    finalize.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
+    finalize.add_argument("--require-merged", action="store_true", help="Fail when any task worktree is not merged to target.")
+    finalize.add_argument("--require-no-task-worktrees", action="store_true", help="Fail when any task worktree still exists.")
+    finalize.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    finalize.add_argument(
+        "--write-state",
+        nargs="?",
+        const="",
+        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+    )
+
+    # cleanup-branch
+    cleanup_branch = subparsers.add_parser("cleanup-branch", help="Delete a merged task branch after its worktree is removed.")
+    cleanup_branch.add_argument("--project-root", help="Host project root containing .codex/project.")
+    cleanup_branch.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug used as codex/<task-slug>.")
+    cleanup_branch.add_argument("--repo", choices=["self", "ai-rules"], default="self", help="Source repository.")
+    cleanup_branch.add_argument("--target-ref", default="main", help="Target ref that must contain the branch.")
+    cleanup_branch.add_argument("--branch", help="Explicit branch name. Default: codex/<task-slug>.")
+    cleanup_branch.add_argument("--execute", action="store_true", help="Actually delete the branch. Default is dry-run.")
     
     # remove
     remove = subparsers.add_parser("remove", help="Remove a task worktree.")
@@ -680,6 +967,14 @@ def main() -> int:
         return command_status(args)
     if args.command == "close":
         return command_close(args)
+    if args.command == "queue":
+        return command_queue(args)
+    if args.command == "merge":
+        return command_merge(args)
+    if args.command == "finalize":
+        return command_finalize(args)
+    if args.command == "cleanup-branch":
+        return command_cleanup_branch(args)
     if args.command == "remove":
         return command_remove(args)
     
