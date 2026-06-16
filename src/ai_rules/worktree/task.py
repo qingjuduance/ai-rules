@@ -303,7 +303,11 @@ def write_status_snapshot(path: Path, snapshot: dict[str, Any]) -> Path:
     """Write the status snapshot atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{safe_id('tmp')}.tmp")
-    temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     temp.replace(path)
     return path
 
