@@ -328,6 +328,9 @@ git push origin main
 
 ## 强制 Worktree 工作区
 
+核心原则是“一切流程化 + 可审计”：重复步骤必须沉淀到脚本，跨会话状态必须写入
+机器可读文件，最终结果必须能通过 task tracking、Git 提交和 worktree 状态快照复盘。
+
 所有修改型任务不论任务量大小，都必须先创建任务级 `git worktree` 和独立分支，再改文件、
 运行会写入仓库的脚本、格式化、导出或提交。只读定位、读取规则、同步检查、状态检查和
 计划输出可以在原工作区完成；一旦要落盘修改，先进入 worktree。
@@ -348,10 +351,16 @@ python .codex\ai-rules\scripts\ai_rules.py worktree-task create `
   --task-tracking .codex/project/records/task-tracking/2026-06-16-worktree固定脚本.md `
   --register-session
 
-python .codex\ai-rules\scripts\ai_rules.py worktree-task status
+python .codex\ai-rules\scripts\ai_rules.py worktree-task status --write-state
+python .codex\ai-rules\scripts\ai_rules.py worktree-task status --format json
 python .codex\ai-rules\scripts\ai_rules.py worktree-task close --repo ai-rules --task-slug worktree-task-script
 python .codex\ai-rules\scripts\ai_rules.py worktree-task remove --repo ai-rules --task-slug worktree-task-script
 ```
+
+`status --write-state` 会生成或更新 `.codex/project/state/worktrees.json`，记录 self 和
+ai-rules 两个仓库下每个任务 worktree 的路径、分支、head、dirty 状态和是否已合并到
+目标分支。后续 AI 会话必须优先读取这个快照，再结合 `git worktree list --porcelain`
+核对真实 Git 状态。
 
 `remove` 默认只输出 dry-run 计划；只有显式传 `--execute` 才会调用
 `git worktree remove`，且默认拒绝移除 dirty worktree。固定脚本会把路径限制在宿主

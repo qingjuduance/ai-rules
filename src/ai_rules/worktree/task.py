@@ -9,9 +9,12 @@ defaults and integrates with worktree-coord session management.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from ai_rules.worktree.coord import current_branch, current_head, detect_repo, git_text, safe_id
 
@@ -46,6 +49,20 @@ def git_common_dir(cwd: Path) -> Path:
     """Get the Git common directory."""
     result = git_text(["rev-parse", "--git-common-dir"], cwd)
     return (cwd / result).resolve()
+
+
+def now_iso() -> str:
+    """Return a local ISO timestamp for audit state files."""
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def display_path(path: Path, project_root: Path) -> str:
+    """Return a project-relative path when possible."""
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def find_project_root(cwd: Path, explicit: str | None = None) -> Path:
@@ -126,6 +143,165 @@ def task_worktree_path(project_root: Path, task_slug: str) -> Path:
 def ai_rules_script() -> Path:
     """Return the ai_rules.py entry for this source tree."""
     return Path(__file__).resolve().parents[3] / "scripts" / "ai_rules.py"
+
+
+def ref_exists(cwd: Path, ref: str) -> bool:
+    """Return whether a Git ref can be resolved."""
+    return git_run(["rev-parse", "--verify", ref], cwd, check=False).returncode == 0
+
+
+def merged_to_target(cwd: Path, branch: str, target_ref: str) -> bool | None:
+    """Return whether branch is an ancestor of target_ref."""
+    if not branch or not target_ref or not ref_exists(cwd, target_ref):
+        return None
+    result = git_run(["merge-base", "--is-ancestor", branch, target_ref], cwd, check=False)
+    return result.returncode == 0
+
+
+def short_status(path: Path) -> str:
+    """Return git status --short for a worktree."""
+    return git_run(["status", "--short"], path, check=False).stdout.strip()
+
+
+def last_commit_message(path: Path) -> str:
+    """Return the latest commit subject for a worktree."""
+    return git_text(["log", "-1", "--pretty=%s"], path, allow_fail=True)
+
+
+def build_worktree_record(
+    wt: dict[str, str],
+    *,
+    repo_name: str,
+    source_repo: Path,
+    project_root: Path,
+    target_ref: str,
+) -> dict[str, Any]:
+    """Build one auditable worktree status record."""
+    path = Path(wt["worktree"]).resolve()
+    branch = clean_branch_name(wt.get("branch", ""))
+    status_text = short_status(path)
+    merged = merged_to_target(source_repo, branch, target_ref)
+    return {
+        "repo": repo_name,
+        "task_slug": path.name,
+        "path": display_path(path, project_root),
+        "absolute_path": str(path),
+        "branch": branch,
+        "head": wt.get("head", "")[:7],
+        "head_full": wt.get("head", ""),
+        "last_commit_message": last_commit_message(path),
+        "status": "dirty" if status_text else "clean",
+        "dirty": bool(status_text),
+        "status_short": status_text.splitlines(),
+        "locked": "locked" in wt,
+        "lock_reason": wt.get("locked", ""),
+        "target_ref": target_ref,
+        "merged_to_target": merged,
+    }
+
+
+def build_status_snapshot(project_root: Path, target_ref: str) -> dict[str, Any]:
+    """Build a machine-readable status snapshot for all task worktrees."""
+    repos = [
+        ("self", project_root),
+        ("ai-rules", project_root / ".codex" / "ai-rules"),
+    ]
+    worktree_base = project_root / ".codex" / "project" / ".worktree"
+    snapshot: dict[str, Any] = {
+        "schema_version": 2,
+        "last_updated": now_iso(),
+        "project_root": str(project_root.resolve()),
+        "core_principle": "一切流程化 + 可审计",
+        "audit_policy": {
+            "worktree_state_source": ".codex/project/state/worktrees.json",
+            "script_entry": "python .codex/ai-rules/scripts/ai_rules.py worktree-task status --write-state",
+            "require_commit_before_merge": True,
+            "require_state_snapshot_before_closeout": True,
+        },
+    }
+
+    for repo_name, repo_path in repos:
+        if not (repo_path / ".git").exists():
+            continue
+        main_status = short_status(repo_path)
+        repo_record: dict[str, Any] = {
+            "main_worktree": display_path(repo_path, project_root),
+            "main_branch": current_branch(repo_path),
+            "main_head": current_head(repo_path)[:7],
+            "main_head_full": current_head(repo_path),
+            "main_status": "dirty" if main_status else "clean",
+            "main_status_short": main_status.splitlines(),
+            "target_ref": target_ref,
+            "task_worktrees": [],
+        }
+        for wt in parse_worktree_list(repo_path):
+            path = Path(wt.get("worktree", "")).resolve()
+            if path == repo_path.resolve():
+                continue
+            try:
+                path.relative_to(worktree_base.resolve())
+            except ValueError:
+                continue
+            repo_record["task_worktrees"].append(
+                build_worktree_record(
+                    wt,
+                    repo_name=repo_name,
+                    source_repo=repo_path,
+                    project_root=project_root,
+                    target_ref=target_ref,
+                )
+            )
+        snapshot[repo_name] = repo_record
+    return snapshot
+
+
+def status_state_path(project_root: Path, output: str | None) -> Path:
+    """Resolve the status snapshot output path."""
+    path = Path(output).expanduser() if output else project_root / ".codex" / "project" / "state" / "worktrees.json"
+    if not path.is_absolute():
+        path = project_root / path
+    return path
+
+
+def write_status_snapshot(path: Path, snapshot: dict[str, Any]) -> Path:
+    """Write the status snapshot atomically."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{safe_id('tmp')}.tmp")
+    temp.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp.replace(path)
+    return path
+
+
+def print_status_text(snapshot: dict[str, Any], task_slug: str | None) -> None:
+    """Print a human-readable worktree status report."""
+    found_any = False
+    for repo_name in ("self", "ai-rules"):
+        repo_record = snapshot.get(repo_name)
+        if not isinstance(repo_record, dict):
+            continue
+        task_worktrees = list(repo_record.get("task_worktrees", []))
+        if task_slug:
+            task_worktrees = [wt for wt in task_worktrees if wt.get("task_slug") == task_slug]
+        if not task_worktrees:
+            continue
+        print(f"Task worktrees ({repo_name}):")
+        found_any = True
+        for wt in task_worktrees:
+            merged = wt.get("merged_to_target")
+            if merged is None:
+                merged_label = "unknown"
+            else:
+                merged_label = "yes" if merged else "no"
+            print(f"  {wt['task_slug']}:")
+            print(f"    path: {wt['absolute_path']}")
+            print(f"    branch: {wt['branch']}")
+            print(f"    head: {wt['head']}")
+            print(f"    dirty: {'yes' if wt['dirty'] else 'no'}")
+            print(f"    merged_to_{wt['target_ref']}: {merged_label}")
+        print()
+
+    if not found_any:
+        print("No task worktrees found.")
 
 
 def command_create(args: argparse.Namespace) -> int:
@@ -248,63 +424,20 @@ def command_create(args: argparse.Namespace) -> int:
 def command_status(args: argparse.Namespace) -> int:
     """Show status of task worktrees."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    worktree_base = repo_root / ".codex" / "project" / ".worktree"
+    snapshot = build_status_snapshot(repo_root, args.target_ref)
 
-    if not worktree_base.exists():
-        print("No task worktrees found.")
-        return 0
+    if args.write_state is not None:
+        output = status_state_path(repo_root, args.write_state)
+        snapshot["state_file"] = display_path(output, repo_root)
+        write_status_snapshot(output, snapshot)
+        if args.format != "json":
+            print(f"Wrote worktree state: {output}")
 
-    # Scan both repos
-    repos = [
-        ("self", repo_root),
-        ("ai-rules", repo_root / ".codex" / "ai-rules"),
-    ]
+    if args.format == "json":
+        print(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print_status_text(snapshot, args.task_slug)
 
-    found_any = False
-    for repo_name, repo_path in repos:
-        if not (repo_path / ".git").exists():
-            continue
-
-        worktrees = parse_worktree_list(repo_path)
-        task_worktrees = [
-            wt for wt in worktrees
-            if Path(wt.get("worktree", "")).resolve().is_relative_to(worktree_base.resolve())
-        ]
-        if args.task_slug:
-            task_worktrees = [
-                wt for wt in task_worktrees if Path(wt.get("worktree", "")).name == args.task_slug
-            ]
-
-        if not task_worktrees:
-            continue
-
-        if not found_any:
-            print(f"Task worktrees ({repo_name}):")
-            found_any = True
-        else:
-            print(f"\nTask worktrees ({repo_name}):")
-        
-        for wt in task_worktrees:
-            path = Path(wt["worktree"])
-            branch = clean_branch_name(wt.get("branch", ""))
-            head = wt.get("head", "")[:7]
-            locked = "locked" in wt
-
-            # Get status
-            status_result = git_run(["status", "--short"], path, check=False)
-            is_dirty = bool(status_result.stdout.strip())
-
-            print(f"  {path.name}:")
-            print(f"    path: {path}")
-            print(f"    branch: {branch}")
-            print(f"    head: {head}")
-            print(f"    dirty: {'yes' if is_dirty else 'no'}")
-            if locked:
-                print(f"    locked: {wt.get('locked', '')}")
-    
-    if not found_any:
-        print("No task worktrees found.")
-    
     return 0
 
 
@@ -458,6 +591,14 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="Show task worktrees status.")
     status.add_argument("--project-root", help="Host project root containing .codex/project.")
     status.add_argument("--task-slug", "--task", dest="task_slug", help="Show one task slug.")
+    status.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
+    status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    status.add_argument(
+        "--write-state",
+        nargs="?",
+        const="",
+        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+    )
     
     # close
     close = subparsers.add_parser("close", help="Check worktree closeout status.")

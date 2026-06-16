@@ -20,6 +20,20 @@
   `Get-Content -Raw -Encoding UTF8`；长文件优先用
   `python .codex/ai-rules/scripts/ai_rules.py context-extract` 摘录。
 
+## 核心原则：流程化与可审计
+
+- 一切可重复、易遗漏、会影响仓库状态或会跨会话协作的流程，都必须优先脚本化、
+  状态化和门禁化；不能只依赖单次对话记忆或人工口头约定。
+- 每个修改型任务必须留下可复盘证据：任务输入拆解、审批、worktree、写锁、
+  操作账本、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
+- worktree 创建、状态同步、收口检查和安全清理优先使用
+  `python .codex/ai-rules/scripts/ai_rules.py worktree-task ...`；当前 worktree
+  总览写入 `.codex/project/state/worktrees.json`，并在 task tracking 中引用。
+- 多会话、多线程或多 worktree 修改同一范围时，必须通过 `worktree-coord` 的
+  session、lock 和 integration queue 记录冲突、整合者、冲突矩阵和验证结果。
+- 用户新增流程要求时，先判断是否应升级为脚本能力、生命周期组件、门禁或状态文件；
+  默认不要只把要求写成散文规则。
+
 ## 会话同步
 
 - 新会话必须运行 `.codex/ai-rules/check-ai-rules-sync.ps1` 或等价 wrapper。
