@@ -1652,7 +1652,7 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
     (governance / "scripts").mkdir(parents=True, exist_ok=True)
     worktree.parent.mkdir(parents=True, exist_ok=True)
     write_text_lf(project / "README.md", "# selftest\n")
-    write_text_lf(project / ".gitignore", ".ai-client/project/.worktree/\n")
+    write_text_lf(project / ".gitignore", ".ai-client/project/.worktree/\n.ai-client/project/state/\n")
     write_text_lf(project / ".ai-client" / "project" / ".gitkeep", "")
     write_text_lf(governance / "AGENTS.md", "# governance selftest\n")
     write_text_lf(

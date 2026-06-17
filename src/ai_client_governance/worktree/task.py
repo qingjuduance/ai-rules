@@ -1160,7 +1160,7 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
             existing_stage_paths = [path for path in stage_paths if (project_root / path).exists()]
             run_closeout_process(
                 plan,
-                ["git", "add", "--", *existing_stage_paths],
+                ["git", "add", "-f", "--", *existing_stage_paths],
                 cwd=project_root,
                 action="stage-host-closeout",
                 repo="self",
