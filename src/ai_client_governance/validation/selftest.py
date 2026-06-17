@@ -165,6 +165,12 @@ def cleanup_stale_selftest_artifacts(root: Path) -> None:
             path.rmdir()
         except OSError:
             pass
+    for base in [root / "scripts", root / "src"]:
+        if not base.exists():
+            continue
+        for path in sorted(base.rglob("__pycache__"), reverse=True):
+            if path.is_dir():
+                remove_tree(path)
 
 
 def output_gate_rows(worktree_variant: str = "complete") -> str:
