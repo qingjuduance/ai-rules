@@ -37,6 +37,7 @@
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
       "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter --message <user-message> --task-id <task-id>",
       "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
+      "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
       "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id> --event preflight",
@@ -52,6 +53,17 @@
         "input-filter"
       ],
       "failPolicy": "fail_closed"
+    },
+    "mandatoryCommandCompression": {
+      "joinPoint": "write-intent",
+      "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan",
+      "requiredEvent": "command-compression.analysis",
+      "appliesTo": [
+        "medium-large-tasks",
+        "mutating-tasks"
+      ],
+      "failPolicy": "fail_closed",
+      "ledgerPolicy": "Prefer tool-invocations run, gate-pool, or a local task runner for important shell commands; raw host shell calls must be justified when not automatically intercepted."
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -72,6 +84,10 @@
     {
       "id": "deterministic-constraints-become-components",
       "summary": "Turn repeatable, checkable, or state-changing constraints into CLI commands, runtime components, gates, state files, or skills before expanding prose rules."
+    },
+    {
+      "id": "compress-local-commands-before-model-roundtrips",
+      "summary": "Analyze new local command candidates for dedupe, batching, gate-pool aggregation, ledger wrapping, or cache reuse before spending additional model turns."
     },
     {
       "id": "changes-need-isolation-and-evidence",
@@ -159,6 +175,7 @@
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
+      "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; task-run plan provides the local dedupe and grouping event payload",
       "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; task-id mode does not require Markdown task tracking",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
@@ -180,6 +197,7 @@
     "runtimeCommands": {
       "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
+      "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan",
       "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter",
       "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRecord": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record",

@@ -142,6 +142,12 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         field("events[].event_type", True, "string", "Lifecycle event type; input preflight must record input-filter.preflight."),
         field("events[].payload", False, "json", "Machine-readable event payload, including join point and filter-chain facts."),
         field("events[].created_at", False, "datetime", "Event time; defaults to now when omitted."),
+        field(
+            "events[event_type=command-compression.analysis].payload.decision",
+            mutating or normalized != [],
+            "string",
+            "Pre-command analysis of whether generated local commands can be deduped, batched, cached, or routed through a local runner.",
+        ),
     ]
     if mutating:
         fields.extend(
@@ -184,6 +190,9 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         gate_requirements.append("Final output must include all output types: " + ", ".join(OUTPUT_TYPES) + ".")
     if mutating:
         gate_requirements.append("Worktree evidence must use creation_method=worktree-task unless break-glass is justified.")
+        gate_requirements.append(
+            "Mutating work must persist events.event_type=command-compression.analysis before write-intent or final gates."
+        )
     if "rules-script" in normalized:
         gate_requirements.append("rules-script tasks require task.approval_label plus an approved approvals[] row with the same label.")
     if "docs" in normalized:
@@ -192,6 +201,7 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         gate_requirements.append("Resume tasks should include PDF/layout validation rows when Markdown/PDF is changed.")
 
     write_commands = [
+        "python <AICG_REPO>/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record init",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record gate --task-id <task-id>",

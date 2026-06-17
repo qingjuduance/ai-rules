@@ -48,6 +48,7 @@ INPUT_FILTER_REQUIREMENT_FIELDS = (
     "validation_decision",
     "acceptance",
 )
+COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
 
 
 @dataclass
@@ -588,6 +589,56 @@ def validate_input_filter_preflight(con: sqlite3.Connection, task_id: str, error
         add(notes, "note", f"input-filter preflight facts present: {INPUT_FILTER_PREFLIGHT_EVENT}", "events")
 
 
+def validate_command_compression_preflight(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require command compression analysis before command-heavy or mutating work."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    matching = [
+        event
+        for event in rows(con, "events", task["task_id"])
+        if str(event["event_type"] or "").strip() == COMMAND_COMPRESSION_EVENT
+    ]
+    if not matching:
+        add(
+            errors,
+            "error",
+            f"command compression preflight requires an events row with event_type={COMMAND_COMPRESSION_EVENT}",
+            "events",
+        )
+        return
+
+    usable = False
+    invalid_event_ids: list[str] = []
+    for event in matching:
+        try:
+            payload = json.loads(event["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            invalid_event_ids.append(event["event_id"])
+            continue
+        if isinstance(payload, dict) and (payload.get("decision") or payload.get("selected_pattern")):
+            usable = True
+            break
+        invalid_event_ids.append(event["event_id"])
+    if not usable:
+        add(
+            errors,
+            "error",
+            "command compression analysis must record a decision or selected_pattern payload",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"command compression analysis facts present: {COMMAND_COMPRESSION_EVENT}", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -613,6 +664,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
         add(errors, "error", "at least one output row is required", "outputs")
 
     validate_input_filter_preflight(con, task_id, errors, notes)
+    validate_command_compression_preflight(con, task, task_types, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}

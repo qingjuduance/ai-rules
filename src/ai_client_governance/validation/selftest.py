@@ -823,6 +823,17 @@ def structured_payload(task_id: str) -> dict[str, object]:
                     ],
                     "fail_policy": "fail_closed",
                 },
+            },
+            {
+                "event_id": f"EVT-{task_id}-COMMAND-COMPRESSION",
+                "event_type": "command-compression.analysis",
+                "payload": {
+                    "join_point": "write-intent",
+                    "decision": "selftest records command compression before mutating task gates",
+                    "selected_pattern": "local-command-compression",
+                    "command_count_before": 2,
+                    "command_count_after": 1,
+                },
             }
         ],
         "worktrees": [
@@ -1135,6 +1146,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "input.filter.user-message-preflight" in component_output
         and "\"fail_policy\": \"fail_closed\"" in component_output
         and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
+        and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
         and "input-filter preflight facts present" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
     )
@@ -1145,6 +1157,78 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
             "lifecycle input-filter emits structured facts and preflight gates pass when those facts exist"
             if passed
             else "lifecycle input-filter preflight regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestResult:
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "components",
+                "--event",
+                "write-intent",
+                "--task-type",
+                "rules-script",
+                "--task-size",
+                "medium",
+                "--kind",
+                "processing-interceptor",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "plan",
+                "--task-id",
+                "TASK-RUN-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--task-type",
+                "docs",
+                "--event",
+                "write-intent",
+                "--changed-path",
+                "AGENTS.md",
+                "--command",
+                "git status --short --branch",
+                "--command",
+                "git status --short --branch",
+                "--command",
+                "python scripts/ai_client_governance.py validate-doc --root .",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    component_output = commands[0].stdout + commands[0].stderr
+    plan_output = commands[1].stdout + commands[1].stderr
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "preflight.interceptor.command-compression" in component_output
+        and "\"event_type\": \"command-compression.analysis\"" in plan_output
+        and "\"skipped_duplicate_count\": 1" in plan_output
+        and "local-command-compression" in plan_output
+    )
+    return TestResult(
+        name="task-run-command-compression-plan",
+        passed=passed,
+        summary=(
+            "task-run plan emits command-compression.analysis and dedupes repeated commands"
+            if passed
+            else "task-run command compression plan regression failed"
         ),
         commands=commands,
     )
@@ -1250,6 +1334,7 @@ def main() -> int:
         test_gate_pool_validate_doc_tracking_context(root, run_dir),
         test_structured_task_record_gate(root, run_dir),
         test_lifecycle_input_filter_preflight(root, run_dir),
+        test_task_run_command_compression_plan(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
     ]
     passed = all(result.passed for result in results)
