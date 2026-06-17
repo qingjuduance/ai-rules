@@ -25,6 +25,7 @@ FAILURE_STATUSES = {"failed", "error", "invalid"}
 FINAL_GATE_NAMES = {
     "ai_client_governance.py session-gate",
     "ai_client_governance.py task-gate",
+    "ai_client_governance.py task-record gate",
     "ai_client_governance.py validate-doc",
     "ai_client_governance.py validate-encoding",
     "ai_client_governance.py scan-corrections",
@@ -254,6 +255,13 @@ def is_failure(item: Invocation) -> bool:
     )
 
 
+def is_task_gate_invocation(item: Invocation) -> bool:
+    return item.name in {
+        "ai_client_governance.py task-gate",
+        "ai_client_governance.py task-record gate",
+    }
+
+
 def records_report(item: Invocation) -> bool:
     command = item.command.lower()
     haystack = f"{item.name} {command}"
@@ -323,7 +331,7 @@ def analyze_flow(
     successful_task_gate_indexes = [
         index
         for index, item in enumerate(invocations)
-        if item.name == "ai_client_governance.py task-gate" and is_success(item)
+        if is_task_gate_invocation(item) and is_success(item)
     ]
     successful_session_gate_indexes = [
         index
@@ -589,4 +597,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

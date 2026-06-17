@@ -1135,6 +1135,83 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_tool_flow_accepts_task_record_gate(root: Path, run_dir: Path) -> TestResult:
+    ledger_dir = run_dir / "tool-flow-task-record-ledger"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    trace_id = "trace-selftest-tool-flow-task-record"
+    events = [
+        {
+            "invocation_id": "selftest-task-record-gate",
+            "timestamp": "2026-06-17T12:00:00+00:00",
+            "name": "ai_client_governance.py task-record gate",
+            "status": "succeeded",
+            "command": "ai_client_governance.py task-record gate --task-id SELFTEST",
+            "exit_code": 0,
+            "final_gate": True,
+            "phase": "final-gate",
+            "trace_id": trace_id,
+        },
+        {
+            "invocation_id": "selftest-session-gate",
+            "timestamp": "2026-06-17T12:00:01+00:00",
+            "name": "ai_client_governance.py session-gate",
+            "status": "succeeded",
+            "command": "ai_client_governance.py session-gate --task-id SELFTEST",
+            "exit_code": 0,
+            "final_gate": True,
+            "phase": "final-gate",
+            "trace_id": trace_id,
+        },
+        {
+            "invocation_id": "selftest-tool-invocations-report",
+            "timestamp": "2026-06-17T12:00:02+00:00",
+            "name": "ai_client_governance.py tool-invocations",
+            "status": "succeeded",
+            "command": "ai_client_governance.py tool-invocations report --trace-id " + trace_id,
+            "exit_code": 0,
+            "phase": "report",
+            "trace_id": trace_id,
+        },
+    ]
+    write_text_lf(
+        ledger_dir / "2026-06.jsonl",
+        "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n",
+    )
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "tool-flow",
+                "--root",
+                str(root),
+                "--ledger-dir",
+                str(ledger_dir),
+                "--trace-id",
+                trace_id,
+                "--format",
+                "text",
+                "--require-task-session-order",
+                "--fail-on-warning",
+            ],
+            cwd=root,
+            env_root=root,
+        )
+    ]
+    output = commands[0].stdout + commands[0].stderr
+    passed = commands[0].exit_code == 0 and "Successful session gate appears" not in output
+    return TestResult(
+        name="tool-flow-accepts-task-record-gate",
+        passed=passed,
+        summary=(
+            "tool-flow treats structured task-record gate as a prior task gate before session-gate"
+            if passed
+            else "tool-flow still reports a false task/session ordering issue for task-record gate"
+        ),
+        commands=commands,
+    )
+
+
 def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResult:
     task_id = "INPUT-FILTER-SELFTEST"
     db = run_dir / "input-filter-selftest.db"
@@ -1881,6 +1958,7 @@ def main() -> int:
         test_task_queue_task_id_priority(root, run_dir),
         test_gate_pool_validate_doc_tracking_context(root, run_dir),
         test_structured_task_record_gate(root, run_dir),
+        test_tool_flow_accepts_task_record_gate(root, run_dir),
         test_lifecycle_input_filter_preflight(root, run_dir),
         test_task_run_command_compression_plan(root, run_dir),
         test_task_run_dag_cache_diagnostics(root, run_dir),
