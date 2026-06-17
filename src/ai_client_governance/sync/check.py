@@ -79,7 +79,7 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def resolve_path(base: Path, value: str | None, default: str) -> Path:
@@ -296,4 +296,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

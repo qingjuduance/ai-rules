@@ -1642,6 +1642,47 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_sync_check_writes_lf_state(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "sync-check-lf-project"
+    embedded = project / ".ai-client" / "ai-client-governance"
+    state_path = project / ".ai-client" / "project" / "state" / "ai-client-governance-state.json"
+    embedded.mkdir(parents=True, exist_ok=True)
+    write_text_lf(embedded / "AGENTS.md", "# governance selftest\n")
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=embedded, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=embedded, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=embedded, env_root=root),
+        run_command(["git", "add", "AGENTS.md"], cwd=embedded, env_root=root),
+        run_command(["git", "commit", "-m", "init governance selftest"], cwd=embedded, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "sync-check",
+                "--target-project-path",
+                str(project),
+                "--no-fetch",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    raw = state_path.read_bytes() if state_path.exists() else b""
+    passed = all(command.exit_code == 0 for command in commands) and raw.endswith(b"\n") and b"\r\n" not in raw
+    return TestResult(
+        name="sync-check-writes-lf-state",
+        passed=passed,
+        summary=(
+            "sync-check writes ai-client-governance-state.json with LF endings"
+            if passed
+            else "sync-check state file used platform newlines or was not written"
+        ),
+        commands=commands,
+    )
+
+
 def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -> TestResult:
     sandbox = Path(tempfile.mkdtemp(prefix="aicg-closeout-"))
     project = sandbox / "p"
@@ -1845,6 +1886,7 @@ def main() -> int:
         test_task_run_dag_cache_diagnostics(root, run_dir),
         test_shell_adapter_scope_diagnostics(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
+        test_sync_check_writes_lf_state(root, run_dir),
         test_worktree_closeout_all_closes_coord_session(root, run_dir),
     ]
     passed = all(result.passed for result in results)
