@@ -16,6 +16,48 @@
     "projectEntry": ".codex/project/rules/project/AGENTS.md",
     "adapterStrategy": "thin-native-entrypoints-import-or-point-to-common-and-project-facts"
   },
+  "designPrinciples": [
+    {
+      "id": "governance-layer-not-runtime",
+      "summary": "Govern host AI coding client capabilities without replacing the client, model, or agent runtime."
+    },
+    {
+      "id": "complete-embedded-repository",
+      "summary": "Keep common rules, scripts, skills, README, and manifest together as an embedded Git repository."
+    },
+    {
+      "id": "entrypoints-are-adapters",
+      "summary": "Treat AGENTS.md, CLAUDE.md, GEMINI.md, Copilot, Cursor, Cline, Windsurf, Continue, Roo, and Aider files as thin adapters to the same facts."
+    },
+    {
+      "id": "deterministic-constraints-become-components",
+      "summary": "Turn repeatable, checkable, or state-changing constraints into CLI commands, runtime components, gates, state files, or skills before expanding prose rules."
+    },
+    {
+      "id": "changes-need-isolation-and-evidence",
+      "summary": "Require worktrees, task tracking, locks, tool ledgers, validation evidence, and final state reporting for modification tasks."
+    },
+    {
+      "id": "project-specialization-stays-out-of-common",
+      "summary": "Keep project business rules, resumes, learning paths, source snapshots, delivery details, and private preferences in the host project layer."
+    },
+    {
+      "id": "preserve-native-project-assets",
+      "summary": "Preserve existing native rule entries, skills, IDE configuration, and team conventions unless the user explicitly approves changes."
+    },
+    {
+      "id": "sync-audits-do-not-decide",
+      "summary": "Detect missing, dirty, ahead, behind, or diverged states without automatically pulling, pushing, merging, or deleting."
+    },
+    {
+      "id": "live-state-over-snapshots",
+      "summary": "Use task tracking, state files, and logs for recovery, but re-check live worktree, Git, session, lock, and queue state before final decisions."
+    },
+    {
+      "id": "agent-neutral-portability",
+      "summary": "Write common rules in agent-neutral terms and keep tool-specific behavior inside local adapters or skills."
+    }
+  ],
   "runtimeArchitecture": {
     "name": "ai-client-governance-plugin",
     "concept": "Spring-style governance plugin layer for AI coding clients. It assumes the host client provides conversation, tool execution, file writes, shell commands, approvals, and session recovery; AI Client Governance governs how those capabilities are used.",

@@ -5,6 +5,7 @@
 | 项目 | 说明 |
 |---|---|
 | 仓库定位 | 可嵌入到任意项目的 AI 编程客户端治理插件层；不替代客户端 agent runtime。 |
+| 设计原则 | 客户端治理层、完整嵌入、薄入口、组件化门禁、项目边界和 live state 优先。 |
 | 推荐嵌入位置 | 目标项目 `.codex/ai-client-governance/` |
 | 通用规则事实源 | `.codex/ai-client-governance/AGENTS.md`，文件名兼容 AGENTS 生态但内容是 agent-neutral 治理契约。 |
 | 项目规则入口 | 目标项目 `.codex/project/rules/project/AGENTS.md` |
@@ -34,6 +35,29 @@ manifest 保持完整上下文。
 治理插件契约才是事实源**。Claude Code 可以通过 `CLAUDE.md` 进入，Gemini CLI
 可以通过 `GEMINI.md` 进入，Copilot、Cursor、Cline、Windsurf、Continue、
 Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则。
+
+## 设计原则
+
+`ai-client-governance` 的后续开发先受这些原则约束：
+
+- **客户端治理层，不是 agent runtime**：治理宿主 AI 编程客户端已有能力怎么使用、
+  记录和验收，不重造客户端，也不把某个模型或工具私有行为写成通用前提。
+- **完整嵌入是事实模型**：通用规则、脚本、skills、README 和 manifest 作为独立
+  Git 仓库嵌入 `.codex/ai-client-governance/`，不回到 common/scripts/skills 分散复制。
+- **入口是 adapter，契约才是事实源**：不同客户端入口只负责导入或指向同一事实源，
+  不能各写一套规则。
+- **可确定约束优先组件化**：可重复、易遗漏、可检查或跨会话影响仓库状态的要求，
+  优先进入 CLI、runtime component、gate、状态文件或 skill。
+- **修改必有隔离与证据**：修改型任务默认有 worktree、task tracking、写锁、工具账本、
+  验证记录和最终状态。
+- **项目特化不污染通用层**：业务、简历、学习路线、源码快照和本地交付规则留在宿主项目。
+- **保留项目原生资产**：已有原生规则入口、skills、IDE 配置和团队约定默认保留，
+  只补缺、索引和报告冲突。
+- **同步检查只审计，不替人决策**：检查 dirty/ahead/behind/diverged，但不自动 pull、
+  push、merge 或删除。
+- **live state 优先于快照**：最终判断 worktree、Git、session、lock 和 queue 状态时，
+  重新核对真实状态。
+- **跨客户端可移植**：新增规则默认使用 agent-neutral 语义，工具私有细节只放在局部适配中。
 
 ## 当前优势
 
