@@ -482,8 +482,6 @@ def validate_payload_shape(payload: dict[str, Any]) -> tuple[dict[str, Any], dic
     if not rows["outputs"]:
         raise ValueError("outputs must contain at least one row")
     task_types = set(json.loads(task["task_types_json"]))
-    if task_types & MUTATING_TASK_TYPES and not rows["worktrees"]:
-        raise ValueError("mutating task types require at least one worktree row")
     if "rules-script" in task_types:
         if not task["approval_label"]:
             raise ValueError("rules-script tasks require task.approval_label")
@@ -682,8 +680,15 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
 
     if task_types & MUTATING_TASK_TYPES:
         worktrees = rows(con, "worktrees", task_id)
-        if not worktrees:
+        if not worktrees and event == "final":
             add(errors, "error", "mutating tasks require worktree evidence", "worktrees")
+        elif not worktrees:
+            add(
+                notes,
+                "note",
+                "mutating task has no worktree evidence yet; prewrite/final gates must require it before repository writes",
+                "worktrees",
+            )
         for worktree in worktrees:
             if worktree["creation_method"] != "worktree-task":
                 if "break" not in worktree["source_handling"].lower() and "批准" not in worktree["source_handling"]:

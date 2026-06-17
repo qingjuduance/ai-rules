@@ -736,7 +736,7 @@ def test_gate_pool_validate_doc_tracking_context(root: Path, run_dir: Path) -> T
     )
 
 
-def structured_payload(task_id: str) -> dict[str, object]:
+def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str, object]:
     outputs = []
     for output_type in ("plan", "status", "final", "script", "error", "git_worktree"):
         outputs.append(
@@ -756,7 +756,7 @@ def structured_payload(task_id: str) -> dict[str, object]:
                 "trace_id": "trace-structured-selftest",
             }
         )
-    return {
+    payload: dict[str, object] = {
         "task": {
             "task_id": task_id,
             "title": "structured task record selftest",
@@ -836,7 +836,19 @@ def structured_payload(task_id: str) -> dict[str, object]:
                 },
             }
         ],
-        "worktrees": [
+        "validations": [
+            {
+                "validation_id": f"VAL-{task_id}-01",
+                "command": "ai_client_governance.py validate-doc --selftest",
+                "cwd": "selftest",
+                "result": "pass",
+                "summary": "validate-doc/doc-index style validation row present for docs task",
+                "evidence": "selftest fixture",
+            }
+        ],
+    }
+    if include_worktree:
+        payload["worktrees"] = [
             {
                 "worktree_id": f"WT-{task_id}-01",
                 "repo": "ai-client-governance",
@@ -853,18 +865,8 @@ def structured_payload(task_id: str) -> dict[str, object]:
                 "push_status": "not_required",
                 "next_action": "none",
             }
-        ],
-        "validations": [
-            {
-                "validation_id": f"VAL-{task_id}-01",
-                "command": "ai_client_governance.py validate-doc --selftest",
-                "cwd": "selftest",
-                "result": "pass",
-                "summary": "validate-doc/doc-index style validation row present for docs task",
-                "evidence": "selftest fixture",
-            }
-        ],
-    }
+        ]
+    return payload
 
 
 def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
@@ -875,11 +877,14 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     missing_filter_payload = structured_payload(task_id + "-NOFILTER")
     missing_filter_payload["events"] = []
     missing_filter_payload["triggers"][0]["trigger_type"] = "selftest"
+    no_worktree_payload = structured_payload(task_id + "-NOWORKTREE", include_worktree=False)
     invalid = run_dir / "structured-invalid.json"
     missing_filter = run_dir / "structured-missing-input-filter.json"
+    no_worktree = run_dir / "structured-no-worktree.json"
     valid = run_dir / "structured-valid.json"
     invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     missing_filter.write_text(json.dumps(missing_filter_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    no_worktree.write_text(json.dumps(no_worktree_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
 
     commands = [
@@ -914,6 +919,50 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
                 "apply",
                 "--json",
                 str(invalid),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(no_worktree),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-NOWORKTREE",
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-NOWORKTREE",
             ],
             cwd=root,
             env_root=root,
@@ -1030,15 +1079,20 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and commands[1].exit_code == 0
         and commands[2].exit_code != 0
         and commands[3].exit_code == 0
-        and commands[4].exit_code != 0
-        and commands[5].exit_code == 0
+        and commands[4].exit_code == 0
+        and commands[5].exit_code != 0
         and commands[6].exit_code == 0
-        and commands[7].exit_code == 0
+        and commands[7].exit_code != 0
         and commands[8].exit_code == 0
         and commands[9].exit_code == 0
+        and commands[10].exit_code == 0
+        and commands[11].exit_code == 0
+        and commands[12].exit_code == 0
         and "requirements must contain at least one row" in (commands[2].stdout + commands[2].stderr)
-        and "input-filter preflight requires" in (commands[4].stdout + commands[4].stderr)
-        and "--task-id" in commands[9].stdout
+        and "mutating task has no worktree evidence yet" in (commands[4].stdout + commands[4].stderr)
+        and "mutating tasks require worktree evidence" in (commands[5].stdout + commands[5].stderr)
+        and "input-filter preflight requires" in (commands[7].stdout + commands[7].stderr)
+        and "--task-id" in commands[12].stdout
     )
     return TestResult(
         name="structured-task-record-gate",
@@ -1163,6 +1217,12 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
 
 
 def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestResult:
+    host_project = run_dir / "task-run-host-project"
+    embedded = host_project / ".ai-client" / "ai-client-governance"
+    (embedded / "scripts").mkdir(parents=True, exist_ok=True)
+    (embedded / "src" / "ai_client_governance").mkdir(parents=True, exist_ok=True)
+    (embedded / "scripts" / "ai_client_governance.py").write_text("# selftest embedded entry\n", encoding="utf-8")
+    (embedded / "manifest.json").write_text('{"name":"ai-client-governance"}\n', encoding="utf-8")
     commands = [
         run_command(
             [
@@ -1212,15 +1272,40 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
             cwd=root,
             env_root=root,
         ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "--root",
+                str(host_project),
+                "plan",
+                "--task-id",
+                "TASK-RUN-HOST-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--event",
+                "write-intent",
+                "--changed-path",
+                "src/example.py",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
     ]
     component_output = commands[0].stdout + commands[0].stderr
     plan_output = commands[1].stdout + commands[1].stderr
+    host_plan_output = commands[2].stdout + commands[2].stderr
     passed = (
         all(command.exit_code == 0 for command in commands)
         and "preflight.interceptor.command-compression" in component_output
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
         and "local-command-compression" in plan_output
+        and ".ai-client/ai-client-governance/scripts/ai_client_governance.py selftest" in host_plan_output
+        and "python scripts/ai_client_governance.py selftest" not in host_plan_output
     )
     return TestResult(
         name="task-run-command-compression-plan",
@@ -1302,6 +1387,24 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             cwd=root,
             env_root=root,
         ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "--root",
+                str(root),
+                "diagnose",
+                "--ledger-dir",
+                str(ledger_dir),
+                "--task-id",
+                "TASK-RUN-DAG-SELFTEST",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
     ]
     component_output = commands[0].stdout + commands[0].stderr
     first_output = commands[1].stdout + commands[1].stderr
@@ -1309,15 +1412,19 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     first: dict[str, object] = {}
     second: dict[str, object] = {}
     diagnose: dict[str, object] = {}
+    filtered_diagnose: dict[str, object] = {}
     try:
         first = json.loads(commands[1].stdout)
         second = json.loads(commands[2].stdout)
         diagnose = json.loads(commands[3].stdout)
+        filtered_diagnose = json.loads(commands[4].stdout)
     except json.JSONDecodeError:
         pass
     first_summary = first.get("summary", {}) if isinstance(first.get("summary"), dict) else {}
     second_summary = second.get("summary", {}) if isinstance(second.get("summary"), dict) else {}
     ledger = diagnose.get("ledger", {}) if isinstance(diagnose.get("ledger"), dict) else {}
+    filtered_ledger = filtered_diagnose.get("ledger", {}) if isinstance(filtered_diagnose.get("ledger"), dict) else {}
+    filtered_filters = filtered_ledger.get("filters", {}) if isinstance(filtered_ledger.get("filters"), dict) else {}
     passed = (
         all(command.exit_code == 0 for command in commands)
         and "preflight.interceptor.task-run-dag" in component_output
@@ -1328,6 +1435,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and int(ledger.get("event_count", 0)) >= 4
         and not ledger.get("duplicate_commands")
         and not ledger.get("failures")
+        and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
+        and int(filtered_ledger.get("event_count", 0)) >= 4
     )
     return TestResult(
         name="task-run-dag-cache-diagnostics",

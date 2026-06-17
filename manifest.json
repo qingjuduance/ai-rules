@@ -54,7 +54,8 @@
         "user-message",
         "input-filter"
       ],
-      "failPolicy": "fail_closed"
+      "failPolicy": "fail_closed",
+      "preWorktreeApplyPolicy": "Input-filter task records may be applied before worktree evidence; prewrite/final gates must enforce worktree evidence before repository writes or closeout."
     },
     "mandatoryCommandCompression": {
       "joinPoint": "write-intent",
@@ -189,8 +190,9 @@
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; task-run plan provides the local dedupe and grouping event payload",
       "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes ledger events by default, and stores trace JSON when requested",
       "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write ledger events",
-      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, ledger failures, cache hit/miss counts, coord locks/sessions, missing worktrees, and raw shell interception gaps",
-      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; task-id mode does not require Markdown task tracking",
+      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, ledger failures, cache hit/miss counts, coord locks/sessions, missing worktrees, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope",
+      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; input-filter records can be applied before worktree creation, while final gates require worktree evidence for mutating tasks; task-id mode does not require Markdown task tracking",
+      "entrypointResolutionPolicy": "runtime command generators and diagnostics resolve only embedded .ai-client/ai-client-governance or governance-repo-local scripts/ai_client_governance.py; host-root scripts/ai_client_governance.py is not a fallback",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"

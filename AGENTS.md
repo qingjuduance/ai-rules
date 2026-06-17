@@ -176,6 +176,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   回复前，必须先运行 `lifecycle input-filter`，把 `requirements`、`triggers`、
   `outputs` 和 `events.event_type=input-filter.preflight` 写入结构化 task record；
   缺少这些事实时 `task-record gate --event preflight` 必须 fail closed。
+- 输入记录属于 turn-start 事实，允许在 worktree 创建前先落库；worktree 证据属于
+  prewrite/final 边界，修改型任务最终收口缺 worktree 时必须 fail closed。
 - 处理拦截器负责审批、worktree、联网核对、task tracking、脚本能力适配和状态机。
 - 输出拦截器负责最终回复覆盖、worktree 完成状态、未合并/未提交/未 push 边界和下一步提示。
 - 横切门禁负责编码、文档引用、Git 边界、脚本账本、trace flow 和 correction 扫描。
@@ -206,7 +208,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告命令账本失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
-  自动拦截缺口。
+  自动拦截缺口，并可用 `--task-id`、`--trace-id`、`--since`、`--until` 收敛到当前任务。
 - 设计新的治理执行结构、缓存策略或观测模型前，必须先联网核对官方或一手资料，
   并在 task record 记录来源、采用结论和不采用边界。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、
@@ -294,6 +296,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - `ai-client-governance` 的 Python 代码采用包结构：`src/ai_client_governance/` 是唯一实现层。
 - `scripts/` 只保留一个公开入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py <command> ...`。
+- 宿主项目根目录的 `scripts/ai_client_governance.py` 不是合法 fallback；运行器只能解析
+  嵌入式 `.ai-client/ai-client-governance/` 或治理仓库自身的 `scripts/` 入口。
 - 新增能力不得再创建 `scripts/codex_*.py`、`scripts/validate_*.py`、
   `scripts/agent_*.py` 这类平铺旧入口；发现旧入口属于当前改动范围时直接移除或迁移。
 - 通用脚本默认使用 Python 标准库实现；PowerShell/Bash 只作为 wrapper 或平台入口。

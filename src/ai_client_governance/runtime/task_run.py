@@ -75,6 +75,58 @@ UNCACHEABLE_PREFIXES = (
 )
 
 
+def is_governance_repo_root(root: Path) -> bool:
+    return (
+        (root / "scripts" / "ai_client_governance.py").exists()
+        and (root / "src" / "ai_client_governance").exists()
+        and (root / "manifest.json").exists()
+    )
+
+
+def package_governance_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def resolve_governance_script(root: Path) -> Path | None:
+    candidates = [
+        root / ".ai-client" / "ai-client-governance",
+        root if is_governance_repo_root(root) else None,
+        package_governance_root(),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        script = candidate / "scripts" / "ai_client_governance.py"
+        if script.exists() and is_governance_repo_root(candidate):
+            return script
+    return None
+
+
+def quote_arg(value: str | Path) -> str:
+    text = str(value)
+    if not text:
+        return '""'
+    if re.search(r'[\s"&|<>^()]', text):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
+
+
+def command_path(path: Path, cwd: Path) -> str:
+    try:
+        display = path.resolve().relative_to(cwd.resolve())
+    except ValueError:
+        display = path.resolve()
+    return quote_arg(str(display).replace("\\", "/"))
+
+
+def governance_command(root: Path, *parts: str) -> str:
+    script = resolve_governance_script(root)
+    if script is None:
+        placeholder = "<missing-ai-client-governance-script>"
+        return " ".join(["python", placeholder, *parts])
+    return " ".join(["python", command_path(script, root), *parts])
+
+
 @dataclass(frozen=True)
 class PlannedCommand:
     id: str
@@ -170,6 +222,31 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def event_time(event: dict[str, Any]) -> datetime | None:
+    for key in ("timestamp", "ended_at", "started_at"):
+        parsed = parse_dt(str(event.get(key) or ""))
+        if parsed:
+            return parsed
+    return None
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -201,12 +278,11 @@ def classify_command(command: str) -> tuple[str, str]:
 
 
 def default_commands(args: argparse.Namespace) -> list[str]:
+    root = Path(args.root).resolve()
+    gov = lambda *parts: governance_command(root, *parts)
     commands: list[str] = []
     if args.task_id:
-        commands.append(
-            "python .ai-client/ai-client-governance/scripts/ai_client_governance.py "
-            f"task-record gate --task-id {args.task_id} --event preflight"
-        )
+        commands.append(gov("task-record", "gate", "--task-id", quote_arg(args.task_id), "--event", "preflight"))
     commands.append("git status --short --branch")
     commands.append("git diff --check")
 
@@ -214,11 +290,11 @@ def default_commands(args: argparse.Namespace) -> list[str]:
     docs_changed = any(path.endswith(".md") or path in {"AGENTS.md", "README.md"} for path in changed)
     source_changed = any(path.endswith(".py") or path.startswith("src/") or path.startswith("scripts/") for path in changed)
     if "docs" in args.task_type or docs_changed:
-        commands.append("python .ai-client/ai-client-governance/scripts/ai_client_governance.py validate-doc --root .")
-        commands.append("python .ai-client/ai-client-governance/scripts/ai_client_governance.py doc-index check --root .")
+        commands.append(gov("validate-doc", "--root", "."))
+        commands.append(gov("doc-index", "check", "--root", "."))
     if "rules-script" in args.task_type or source_changed:
         commands.append("python -m compileall src scripts")
-        commands.append("python scripts/ai_client_governance.py selftest --root .")
+        commands.append(gov("selftest", "--root", "."))
     return commands
 
 
@@ -800,10 +876,41 @@ def read_ledger_events(root: Path, ledger_dir: str | None = None) -> list[dict[s
     return events
 
 
+def filter_ledger_events(
+    events: list[dict[str, Any]],
+    *,
+    task_id: str = "",
+    trace_id: str = "",
+    since: str = "",
+    until: str = "",
+) -> list[dict[str, Any]]:
+    since_dt = parse_dt(since)
+    until_dt = parse_dt(until)
+    filtered: list[dict[str, Any]] = []
+    for event in events:
+        if task_id and str(event.get("task_id") or "") != task_id:
+            continue
+        if trace_id and str(event.get("trace_id") or "") != trace_id:
+            continue
+        timestamp = event_time(event)
+        if since_dt and (timestamp is None or timestamp < since_dt):
+            continue
+        if until_dt and (timestamp is None or timestamp > until_dt):
+            continue
+        filtered.append(event)
+    return filtered
+
+
 def coord_summary(coord_root: Path) -> dict[str, Any]:
-    script = coord_root / "scripts" / "ai_client_governance.py"
-    if not script.exists():
-        return {"available": False, "reason": f"missing {script}"}
+    script = resolve_governance_script(coord_root)
+    if script is None:
+        return {
+            "available": False,
+            "reason": (
+                "missing embedded .ai-client/ai-client-governance/scripts/ai_client_governance.py "
+                "or ai-client-governance repository-local scripts/ai_client_governance.py"
+            ),
+        }
     try:
         completed = subprocess.run(
             ["python", str(script), "worktree-coord", "--format", "json", "status"],
@@ -844,8 +951,13 @@ def build_diagnostics(
     coord_root: Path,
     results: list[ExecutionResult] | None = None,
     ledger_dir: str | None = None,
+    task_id: str = "",
+    trace_id: str = "",
+    since: str = "",
+    until: str = "",
 ) -> dict[str, Any]:
-    events = read_ledger_events(root, ledger_dir)
+    all_events = read_ledger_events(root, ledger_dir)
+    events = filter_ledger_events(all_events, task_id=task_id, trace_id=trace_id, since=since, until=until)
     terminal_events = [event for event in events if event.get("status") != "started"]
     executed_events = [event for event in terminal_events if not event.get("cached")]
     commands = [str(event.get("command", "")).strip() for event in executed_events if event.get("command")]
@@ -868,6 +980,13 @@ def build_diagnostics(
     return {
         "ledger": {
             "directory": str(ledger_directory(root, ledger_dir)),
+            "filters": {
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "since": since,
+                "until": until,
+                "total_event_count": len(all_events),
+            },
             "event_count": len(events),
             "duplicate_commands": duplicates[:10],
             "failures": failures[-10:],
@@ -942,11 +1061,20 @@ def format_run_text(report: TaskRunReport) -> str:
 
 def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
     ledger = diagnostics.get("ledger", {})
+    filters = ledger.get("filters", {})
     coord = diagnostics.get("coordination", {})
     run = diagnostics.get("run", {})
     lines = [
         "AI Client Governance Task Run Diagnostics",
+        (
+            "Ledger filters: "
+            f"task_id={filters.get('task_id') or '<all>'} "
+            f"trace_id={filters.get('trace_id') or '<all>'} "
+            f"since={filters.get('since') or '<none>'} "
+            f"until={filters.get('until') or '<none>'}"
+        ),
         f"Ledger events: {ledger.get('event_count', 0)}",
+        f"Ledger events total: {filters.get('total_event_count', ledger.get('event_count', 0))}",
         f"Ledger duplicate commands: {len(ledger.get('duplicate_commands', []))}",
         f"Ledger failures: {len(ledger.get('failures', []))}",
         f"Raw shell auto intercepted: {ledger.get('raw_shell_auto_intercepted')}",
@@ -1003,6 +1131,10 @@ def parse_args() -> argparse.Namespace:
     diagnose = sub.add_parser("diagnose", help="Report command ledger, cache, and coordination diagnostics.")
     diagnose.add_argument("--coord-root", help="Repository root whose worktree-coord state should be diagnosed.")
     diagnose.add_argument("--ledger-dir", help="Tool invocation ledger directory. Default: host .ai-client/project/logs/tool-invocations.")
+    diagnose.add_argument("--task-id", default="", help="Only diagnose ledger events for one structured task id.")
+    diagnose.add_argument("--trace-id", default="", help="Only diagnose ledger events for one trace id.")
+    diagnose.add_argument("--since", default="", help="Only include ledger events at or after this ISO timestamp.")
+    diagnose.add_argument("--until", default="", help="Only include ledger events at or before this ISO timestamp.")
     diagnose.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
 
@@ -1027,7 +1159,15 @@ def main() -> int:
     if args.command_name == "diagnose":
         root = Path(args.root).resolve()
         coord_root = Path(args.coord_root).resolve() if args.coord_root else root
-        diagnostics = build_diagnostics(root=root, coord_root=coord_root, ledger_dir=args.ledger_dir)
+        diagnostics = build_diagnostics(
+            root=root,
+            coord_root=coord_root,
+            ledger_dir=args.ledger_dir,
+            task_id=args.task_id,
+            trace_id=args.trace_id,
+            since=args.since,
+            until=args.until,
+        )
         if args.format == "json":
             print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
         else:
