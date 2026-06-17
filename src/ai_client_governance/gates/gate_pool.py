@@ -42,6 +42,8 @@ TEXT_EXTENSIONS = {
 }
 
 PLACEHOLDER_TASK_ID = "<task-id>"
+LEDGER_DIR_ENV = "AICG_TOOL_INVOCATIONS_DIR"
+PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,22 @@ class GateStep:
     command: list[str]
     final_gate: bool = False
     reason: str = ""
+
+
+def configured_path(root: Path, env_name: str, fallback: Path) -> Path:
+    configured = os.environ.get(env_name, "")
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else root / path
+    return root / fallback
+
+
+def invocation_ledger_dir(root: Path) -> Path:
+    return configured_path(root, LEDGER_DIR_ENV, Path(".ai-client/project/logs/tool-invocations"))
+
+
+def pycache_prefix(root: Path) -> Path:
+    return configured_path(root, PYCACHE_PREFIX_ENV, PYTHON_PYCACHE_DIR)
 
 
 def parse_args() -> argparse.Namespace:
@@ -478,6 +496,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
     trace_id = args.trace_id or ""
     if trace_id:
         ledger_root = host_project_root(root)
+        ledger_dir = invocation_ledger_dir(ledger_root)
         steps.append(
             GateStep(
                 name="ai_client_governance.py tool-invocations",
@@ -488,6 +507,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "tool-invocations",
                     "--root",
                     str(ledger_root),
+                    "--ledger-dir",
+                    str(ledger_dir),
                     "report",
                     "--trace-id",
                     trace_id,
@@ -507,6 +528,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "tool-flow",
                     "--root",
                     str(ledger_root),
+                    "--ledger-dir",
+                    str(ledger_dir),
                     "--trace-id",
                     trace_id,
                     "--top",
@@ -560,12 +583,15 @@ def run_record(
     exit_code: int | None = None,
 ) -> int:
     ledger_root = host_project_root(root)
+    ledger_dir = invocation_ledger_dir(ledger_root)
     command = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
         "--root",
         str(ledger_root),
+        "--ledger-dir",
+        str(ledger_dir),
         "record",
         "--name",
         "ai_client_governance.py gate-pool",
@@ -591,7 +617,7 @@ def run_record(
     if exit_code is not None:
         command.extend(["--exit-code", str(exit_code)])
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(ledger_root / PYTHON_PYCACHE_DIR)
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(ledger_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(command, cwd=root, env=env).returncode
@@ -609,12 +635,15 @@ def run_step(
     attempt: int,
 ) -> int:
     ledger_root = host_project_root(root)
+    ledger_dir = invocation_ledger_dir(ledger_root)
     wrapper = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
         "--root",
         str(ledger_root),
+        "--ledger-dir",
+        str(ledger_dir),
         "run",
         "--name",
         step.name,
@@ -642,7 +671,7 @@ def run_step(
     wrapper.append("--")
     wrapper.extend(step.command)
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(ledger_root / PYTHON_PYCACHE_DIR)
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(ledger_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(wrapper, cwd=root, env=env).returncode

@@ -26,6 +26,8 @@ from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, TOOL_INVOCATIO
 from ai_client_governance.runtime.scope import classify_scope
 
 DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
+LEDGER_DIR_ENV = "AICG_TOOL_INVOCATIONS_DIR"
+PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
 SCHEMA_VERSION = 2
 FINAL_GATE_NAMES = {
     "ai_client_governance.py session-gate",
@@ -122,10 +124,19 @@ def is_final_gate(name: str, explicit: bool) -> bool:
 
 
 def ledger_dir(root: Path, ledger_dir_arg: str | None) -> Path:
-    if ledger_dir_arg:
-        path = Path(ledger_dir_arg)
+    configured = ledger_dir_arg or os.environ.get(LEDGER_DIR_ENV, "")
+    if configured:
+        path = Path(configured)
         return path if path.is_absolute() else root / path
     return root / DEFAULT_LEDGER_DIR
+
+
+def pycache_prefix(root: Path) -> Path:
+    configured = os.environ.get(PYCACHE_PREFIX_ENV, "")
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else root / path
+    return root / PYTHON_PYCACHE_DIR
 
 
 def ledger_file(root: Path, ledger_dir_arg: str | None, timestamp: str) -> Path:
@@ -485,7 +496,7 @@ def command_run(args: argparse.Namespace) -> int:
     child_env = os.environ.copy()
     child_env["CODEX_TRACE_ID"] = trace_id
     child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
-    child_env["PYTHONPYCACHEPREFIX"] = str(root / PYTHON_PYCACHE_DIR)
+    child_env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(root))
     child_env["PYTHONIOENCODING"] = "utf-8"
     child_env["PYTHONUTF8"] = "1"
     if task_node_id:

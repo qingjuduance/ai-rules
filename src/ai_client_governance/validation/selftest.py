@@ -14,11 +14,18 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, TMP_DIR, ai_client_governance_entrypoint
+from ai_client_governance.common.paths import (
+    PYTHON_PYCACHE_DIR,
+    TMP_DIR,
+    TOOL_INVOCATIONS_DIR,
+    ai_client_governance_entrypoint,
+)
 from ai_client_governance.records import task_record as structured_task_record
 
 
 SELFTEST_ARTIFACT_ENV = "AICG_SELFTEST_ARTIFACT_ROOT"
+TOOL_INVOCATIONS_LEDGER_ENV = "AICG_TOOL_INVOCATIONS_DIR"
+PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
 
 
 @dataclass
@@ -41,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run ai-client-governance black-box self-tests.")
     parser.add_argument("--root", default=".", help="Target project root. Default: current directory.")
     parser.add_argument("--keep", action="store_true", help="Keep temporary self-test files.")
+    parser.add_argument("--cleanup-stale", action="store_true", help="Remove stale selftest-owned artifacts before running.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
     return parser.parse_args()
 
@@ -60,6 +68,8 @@ def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONPYCACHEPREFIX": str(artifact_root / PYTHON_PYCACHE_DIR),
+            PYCACHE_PREFIX_ENV: str(artifact_root / PYTHON_PYCACHE_DIR),
+            TOOL_INVOCATIONS_LEDGER_ENV: str(artifact_root / TOOL_INVOCATIONS_DIR),
             "AICG_DOC_INDEX_OUTPUT": str(artifact_root / "doc-index" / "graph.json"),
         },
     )
@@ -130,6 +140,27 @@ def cleanup_empty_selftest_parents(root: Path, run_dir: Path, before: set[str]) 
         rel = path.relative_to(root).as_posix()
         if rel in before:
             continue
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def cleanup_stale_selftest_artifacts(root: Path) -> None:
+    for path in [
+        root / TMP_DIR / "ai-client-governance-selftest",
+        root / PYTHON_PYCACHE_DIR,
+        root / TOOL_INVOCATIONS_DIR,
+    ]:
+        if path.exists():
+            remove_tree(path)
+    for path in [
+        root / PYTHON_PYCACHE_DIR.parent,
+        root / TOOL_INVOCATIONS_DIR.parent,
+        root / TMP_DIR,
+        root / ".ai-client" / "project",
+        root / ".ai-client",
+    ]:
         try:
             path.rmdir()
         except OSError:
@@ -2180,13 +2211,24 @@ def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
+    if args.cleanup_stale:
+        cleanup_stale_selftest_artifacts(root)
     before_ai_client = snapshot_ai_client_paths(root)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = root / TMP_DIR / "ai-client-governance-selftest" / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
     previous_artifact_root = os.environ.get(SELFTEST_ARTIFACT_ENV)
+    previous_tool_invocations_ledger = os.environ.get(TOOL_INVOCATIONS_LEDGER_ENV)
+    previous_pycache_prefix_env = os.environ.get(PYCACHE_PREFIX_ENV)
+    previous_python_pycache = os.environ.get("PYTHONPYCACHEPREFIX")
+    previous_sys_pycache_prefix = sys.pycache_prefix
     os.environ[SELFTEST_ARTIFACT_ENV] = str(run_dir)
+    pycache_root = run_dir / PYTHON_PYCACHE_DIR
+    os.environ[TOOL_INVOCATIONS_LEDGER_ENV] = str(run_dir / TOOL_INVOCATIONS_DIR)
+    os.environ[PYCACHE_PREFIX_ENV] = str(pycache_root)
+    os.environ["PYTHONPYCACHEPREFIX"] = str(pycache_root)
+    sys.pycache_prefix = str(pycache_root)
     try:
         results = [
             test_worktree_gate(root, run_dir),
@@ -2211,6 +2253,19 @@ def main() -> int:
             os.environ.pop(SELFTEST_ARTIFACT_ENV, None)
         else:
             os.environ[SELFTEST_ARTIFACT_ENV] = previous_artifact_root
+        if previous_tool_invocations_ledger is None:
+            os.environ.pop(TOOL_INVOCATIONS_LEDGER_ENV, None)
+        else:
+            os.environ[TOOL_INVOCATIONS_LEDGER_ENV] = previous_tool_invocations_ledger
+        if previous_pycache_prefix_env is None:
+            os.environ.pop(PYCACHE_PREFIX_ENV, None)
+        else:
+            os.environ[PYCACHE_PREFIX_ENV] = previous_pycache_prefix_env
+        if previous_python_pycache is None:
+            os.environ.pop("PYTHONPYCACHEPREFIX", None)
+        else:
+            os.environ["PYTHONPYCACHEPREFIX"] = previous_python_pycache
+        sys.pycache_prefix = previous_sys_pycache_prefix
 
     unexpected_artifacts = unexpected_ai_client_artifacts(root, run_dir, before_ai_client)
     results.append(
