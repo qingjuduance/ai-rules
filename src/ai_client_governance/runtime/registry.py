@@ -525,6 +525,34 @@ def default_components() -> list[ComponentDefinition]:
             performance_budget="local JSON/text render; no repo scan",
         ),
         component(
+            "preflight.interceptor.command-compression",
+            "processing-interceptor",
+            "preflight",
+            208,
+            "Analyze whether newly generated local commands can be deduped, batched, or replaced by a local runner.",
+            task_sizes=("medium", "large"),
+            events=("user-message", "plan-output", "write-intent", "resume", "final-output"),
+            requires_facts=("task_id", "task_type", "command_candidates"),
+            produces_facts=("command_compression_analysis", "command_compression_event"),
+            mechanism_label="ai_client_governance.py task-run plan",
+            gate_label="ai_client_governance.py task-record gate requires event_type=command-compression.analysis",
+            gate_step="command-compression",
+            fail_policy="fail_closed",
+            effect="readonly",
+            dedupe_key="task_id:event:changed_paths:command_candidates",
+            condition=(
+                "Run before write-intent or final-output for every medium/large or mutating task; "
+                "prefer one local task-run/gate-pool/tool-ledger pass over repeated model-mediated command selection."
+            ),
+            performance_budget="local command list normalization and grouping only; no repository scan unless explicit commands do it",
+            metadata={
+                "join_point": "write-intent",
+                "required_event": "command-compression.analysis",
+                "aop_role": "around-advice",
+                "ledger_policy": "wrap important shell commands with tool-invocations run until host shell interception exists",
+            },
+        ),
+        component(
             "preflight.gate.structured-task-record",
             "cross-cutting-gate",
             "preflight",

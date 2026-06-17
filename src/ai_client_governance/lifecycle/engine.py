@@ -315,6 +315,21 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "status": "done",
                 "trace_id": report.trace_id,
             },
+            {
+                "trigger_id": f"TRG-{id_base}-COMMAND-COMPRESSION",
+                "trigger_type": "command-compression",
+                "source": "ai_client_governance.py lifecycle input-filter",
+                "matched_requirement": matched,
+                "priority": "high",
+                "applicability_scope": "mandatory pre-command AOP join point",
+                "scope_expansion": "not expanded",
+                "reason": "Medium, large, or mutating tasks must analyze whether local commands can be deduped, batched, or run through a local runner before model-mediated step-by-step execution.",
+                "required_action": "Persist command-compression.analysis before write-intent, final-output, or resume gates.",
+                "executed_steps": "Rendered command compression preflight event.",
+                "quantitative_evidence": f"event={structured_task_record.COMMAND_COMPRESSION_EVENT}",
+                "status": "done",
+                "trace_id": report.trace_id,
+            },
         ],
         "outputs": outputs,
         "events": [
@@ -337,7 +352,23 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     ],
                     "fail_policy": "fail_closed",
                 },
-            }
+            },
+            {
+                "event_id": f"EVT-{id_base}-COMMAND-COMPRESSION",
+                "event_type": structured_task_record.COMMAND_COMPRESSION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "task_id": task_id,
+                    "requirements": requirement_ids,
+                    "task_types": task_types,
+                    "task_size": report.classification.task_size,
+                    "changed_paths": report.classification.changed_paths,
+                    "decision": "Analyze new local command candidates for dedupe, batching, gate-pool use, and tool-invocations ledger wrapping before write-intent.",
+                    "selected_pattern": "lifecycle-preflight-command-compression",
+                    "recommended_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
+                    "fail_policy": "fail_closed",
+                },
+            },
         ],
     }
     return payload

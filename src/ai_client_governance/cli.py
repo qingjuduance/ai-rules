@@ -15,7 +15,7 @@ from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
 from ai_client_governance.records import scan_corrections, task_queue, task_record, tool_flow, tool_invocations
-from ai_client_governance.runtime import contract, registry as runtime_registry
+from ai_client_governance.runtime import contract, registry as runtime_registry, task_run
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
 from ai_client_governance.worktree import coord as worktree_coord
@@ -40,6 +40,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "task-gate": ("Validate task-type evidence.", task_gate.main),
     "task-queue": ("Manage task workflow state.", task_queue.main),
     "task-record": ("Manage typed SQLite task records.", task_record.main),
+    "task-run": ("Plan compressed local task command execution.", task_run.main),
     "templates": ("Render Markdown templates.", templates.main),
     "selftest": ("Run ai-client-governance black-box self-tests.", selftest.main),
     "tool-flow": ("Report invocation trace flow.", tool_flow.main),

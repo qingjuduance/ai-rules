@@ -27,6 +27,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **可确定约束优先组件化**：可重复、易遗漏、可检查或跨会话影响仓库状态的要求，
   优先沉淀为 CLI、runtime component、gate、状态文件或 skill 能力；散文规则只保留
   不可绕过的边界和设计意图。
+- **先压缩本地确定步骤**：生成或运行新命令前，必须先判断能否去重、合并、并行、
+  使用 gate-pool/task-run 或复用缓存，避免把确定性命令选择拆成多轮模型 HTTP 往返。
 - **结构化事实优先于 Markdown 反解析**：新任务先写 SQLite 事实源
   `.ai-client/project/state/aicg.db`，再按需导出 Markdown 报告；不能把机器门禁依赖
   建在散文和 Markdown 表格的事后反解析上。
@@ -188,6 +190,14 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 脚本判断与人工判断不一致时，在 task tracking 记录采用、修正或阻塞原因。
 - 新增治理节点必须同时说明触发条件、去重键、失败策略、验证证据和性能边界；
   不能让所有任务无差别慢跑同一检查。
+- 生成、选择或运行本地命令前，必须经过 `command-compression` 前置拦截器：
+  使用 `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan ...`
+  或等价本地分析记录 `event_type=command-compression.analysis`，说明哪些命令被去重、
+  合并、并行、交给 gate-pool 或必须按顺序执行。中/大型或修改型任务缺该事件时
+  `task-record gate` 必须 fail closed。
+- 重要 shell 命令优先通过 `tool-invocations run`、`gate-pool` 或后续本地 runner 执行，
+  让 `.ai-client/project/logs/tool-invocations/*.jsonl` 可复盘。宿主客户端裸 shell 调用若
+  无法自动拦截，必须在 task record 中记录原因或用显式 wrapper 补账。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、
   `condition`、`requires_facts`、`produces_facts`、`effect`、`fail_policy`、
   `dedupe_key` 或 `gate_step`、`performance_budget`。`skill` 只能作为 capability
@@ -207,6 +217,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record ...`。
 - 执行前必须先用 `contract describe` 明确本任务必填字段、枚举、gate 和
   写入命令；不要靠最终 `task-gate` 从 Markdown 里反推缺什么。
+- 中/大型或修改型任务还必须写入 `events.event_type=command-compression.analysis`。
+  该事件记录本轮候选命令的压缩决策、去重数量、并行/顺序分组、账本策略和是否选择
+  gate-pool/task-run 本地路径。
 - `task-record apply --json <file>` 是结构化写入入口；它必须在落库前校验
   `tasks`、`requirements`、`triggers`、`outputs`、`events`、`worktrees`、`validations`
   的必填字段、枚举和外键。校验失败不得生成半成品记录。
@@ -247,8 +260,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   记录判定、联网/搜索判定、子 AI/验证判定和验收/最终回复覆盖口径。
 - 对新任务，机器事实必须由 `lifecycle input-filter` 或等价 AOP/filter-chain 前置步骤写入
   SQLite：至少包含逐 REQ 行、`trigger_type=user-message` 或 `input-filter` 的触发日志、
-  以及 `event_type=input-filter.preflight` 的事件行。只在对话里分析或只写 Markdown
-  不满足 preflight。
+  `event_type=input-filter.preflight` 和需要时的 `event_type=command-compression.analysis`
+  事件行。只在对话里分析或只写 Markdown 不满足 preflight。
 - `task-gate` 必须按表格行解析输入拆解门禁，并与 `## 用户要求追踪门禁` 的 REQ
   行交叉校验；散文式“记录/搜索/验证”关键词不能代替逐 REQ 判定。
 - 用户输入中出现“联网、搜索、查、核对、最新、资料、URL、引用”等要求时，必须在
@@ -257,8 +270,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `## 用户要求追踪门禁`。
 - 每条要求使用稳定 ID，记录状态、动作、实现证据、验证证据和最终回复覆盖口径。
 - 同一轮多个要求不能只处理最近一条；最终回复前逐条回看。
-- 触发用户要求、任务类型、安全要求、脚本能力适配、上下文压缩、脚本账本或最终门禁时，
-  必须在 `## 要求触发日志` 记录 TRG 行。
+- 触发用户要求、任务类型、安全要求、脚本能力适配、命令压缩、上下文压缩、脚本账本
+  或最终门禁时，必须在 `## 要求触发日志` 记录 TRG 行。
 - 最终回复前必须用 `## 输出信息门禁` 或等价记录覆盖已完成项、未处理项、
   未验证项、阻塞项、active pending、Git/worktree 状态和下一步。
 - 修改型任务的输出门禁必须提示 worktree 是否完成、是否已合并、是否 stage/commit、
