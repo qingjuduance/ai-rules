@@ -83,7 +83,7 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
 - **24 小时只限制 fetch**：为了减少远端请求，默认最多 24 小时 fetch 一次；
   但本地 dirty/ahead/behind/diverged 状态每次会话都会检查并提示。
 - **脚本能力和上下文可恢复**：脚本不支持当前目标时先走能力适配门禁，
-  连续纠错或新要求叠加时把压缩快照写入 task tracking，避免手工绕过和恢复遗漏。
+  连续纠错或新要求叠加时把压缩快照写入结构化 task record，避免手工绕过和恢复遗漏。
 - **用户要求可验收**：每条用户要求登记为 `REQ-*`，绑定处理状态、实现证据、
   验证证据和最终回复覆盖；`ai_client_governance.py task-gate` 会检查缺失项。
 - **结构化记录优先**：新任务优先写入 SQLite 事实源
@@ -146,10 +146,12 @@ python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate
 
 `task-record apply` 会在写入前检查 `tasks`、`requirements`、`triggers`、
 `outputs`、`worktrees`、`validations` 等表的必填字段、枚举和外键。缺少必填
-字段时直接拒绝写入，避免 AI 到最终 gate 才发现 Markdown 表格格式缺失。
+字段时直接拒绝写入，避免 AI 到最终 gate 才发现机器事实缺失。
 
-Markdown 仍可通过 `task-record export-md` 生成，但它只是人类阅读报告；DB 才是
-新任务 gate 的事实源。历史 `.md` task tracking 保留审计意义，不批量改写。
+Markdown 只能通过 `task-record export-md` 作为人类阅读报告生成；DB 是新任务 gate
+的事实源。历史 `.md` task tracking 保留审计意义，不再作为当前任务的机器门禁输入。
+`task-record status` 是只读自省命令：目标 DB 不存在时返回空摘要，不创建
+`.ai-client/project/state/aicg.db`。
 
 ## 多工具入口适配器
 
@@ -721,7 +723,7 @@ python scripts\ai_client_governance.py worktree-coord session register `
 ## 门禁池与调用链路
 
 `ai_client_governance.py gate-pool` 用来把固定门禁编排成一次可追踪运行。它不会自动
-修改规则、tracking、corrections、pending 或 Git 状态；每个子门禁都通过
+修改规则、结构化 task record、corrections、pending 或 Git 状态；每个子门禁都通过
 `ai_client_governance.py tool-invocations` 写入 `.ai-client/project/logs/tool-invocations/*.jsonl`，并共享同一个
 `trace_id`。
 
@@ -757,7 +759,7 @@ python scripts\ai_client_governance.py worktree-coord session register `
 文档联动节点属于 post-change 链路。修改功能、脚本、规则、skill、manifest、
 README 或入口 adapter 后，必须判断是否影响用户可读文档、命令说明、索引、
 Markdown 链接或 `.references` 记录。影响到文档时先同步文档和引用；不影响时在
-task tracking 写明 no-impact 理由。对应的机器检查是：
+结构化 task record 写明 no-impact 理由。对应的机器检查是：
 
 ```powershell
 python scripts\ai_client_governance.py runtime components `
@@ -766,7 +768,7 @@ python scripts\ai_client_governance.py runtime components `
   --final
 
 python scripts\ai_client_governance.py gate-pool `
-  --task-tracking .ai-client\project\records\task-tracking\example.md `
+  --task-id <task-id> `
   --task-type rules-script `
   --changed-path src\ai_client_governance\runtime\registry.py `
   --changed-path README.md `
@@ -779,10 +781,13 @@ python scripts\ai_client_governance.py completion-test `
   --changed-path src\ai_client_governance\runtime\registry.py
 ```
 
+`gate-pool --dry-run` 是只读规划入口；没有 `--task-id` 或 `--task-tracking` 时会用
+`<task-id>` 占位展示门禁链路，真正执行时仍必须提供结构化 task id 或历史 tracking。
+
 验收时至少看四件事：`runtime components` 能看到相关节点，`gate-pool --dry-run`
 能看到一次聚合后的 `ai_client_governance.py doc-index` 和 completion/worktree 节点，
 `completion-test` 能生成测试计划，`tool-flow` 能看到最终门禁和报告。
-如果链路没有触发、重复触发或明显拖慢任务，必须在 task tracking 记录原因并修正
+如果链路没有触发、重复触发或明显拖慢任务，必须在结构化 task record 记录原因并修正
 触发条件或 `gate_step` 去重策略。
 
 用户输入中出现联网、搜索、核对、最新、资料、URL、引用等触发词时，输入过滤器必须
@@ -828,8 +833,7 @@ python scripts\ai_client_governance.py tool-flow `
 ## 输出门禁与 Worktree 收口
 
 修改型任务通常不会自动合并 worktree，也不会自动 stage、commit 或 push。
-因此最终回复前，task tracking 必须有 `## Worktree 完成记录` 和
-`## 输出信息门禁` 中的 worktree/Git 行，至少写清：
+因此最终回复前，结构化 task record 必须有 worktree 完成记录和输出边界记录，至少写清：
 
 - worktree 路径、分支、基准提交和当前 `git status`。
 - worktree 任务是否完成。

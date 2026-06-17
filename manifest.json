@@ -38,9 +38,11 @@
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
       "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id>",
+      "taskRecordStatus": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record status",
       "taskGateStructured": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate --task-id <task-id>"
     },
-    "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not the primary gate input for new tasks."
+    "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
+    "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
   },
   "designPrinciples": [
     {
@@ -135,16 +137,16 @@
       "phase": "post-change",
       "trigger": "rules, scripts, skills, manifest, README, adapters, or Markdown changes that may affect user-facing docs or references",
       "gateStep": "doc-index",
-      "trackingEvidence": "record affected docs and references, updated files, or explicit no-impact rationale"
+      "trackingEvidence": "record affected docs and references, updated files, or explicit no-impact rationale in the structured task record"
     },
     "executionGuarantees": {
       "componentVisibility": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components must show matching nodes for the task context",
-      "gateExecution": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show executable gate steps before final runs",
+      "gateExecution": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show gate steps without mutating state; actual runs require a task id or historical tracking source",
       "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
-      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before final gates",
+      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before final gates; task-id mode does not require Markdown task tracking",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"

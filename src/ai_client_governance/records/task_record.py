@@ -97,12 +97,27 @@ def db_path(root: Path, override: str | None) -> Path:
     return root / STRUCTURED_DB_PATH
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
+    if create:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    elif not path.exists():
+        raise ValueError(f"structured DB does not exist: {path}")
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     return con
+
+
+def empty_summary(path: Path, task_id: str | None = None) -> dict[str, Any]:
+    if task_id:
+        return {"db": str(path), "task_id": task_id, "exists": False}
+    return {
+        "db": str(path),
+        "exists": False,
+        "schema_version": SCHEMA_VERSION,
+        "task_count": 0,
+        "tasks": [],
+    }
 
 
 def quote_enum(values: tuple[str, ...]) -> str:
@@ -691,10 +706,22 @@ def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
     path = db_path(root, args.db)
-    con = connect(path)
-    init_db(con)
 
     try:
+        if args.command == "status":
+            if not path.exists():
+                summary = empty_summary(path, args.task_id)
+            else:
+                con = connect(path, create=False)
+                summary = task_summary(con, args.task_id)
+            print_json(summary) if args.format == "json" else print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return 0
+
+        create_db = args.command in {"init", "apply"}
+        con = connect(path, create=create_db)
+        if create_db:
+            init_db(con)
+
         if args.command == "init":
             result = {"db": str(path), "schema_version": SCHEMA_VERSION}
             print_json(result) if args.format == "json" else print(f"Initialized structured DB: {path}")
@@ -744,10 +771,6 @@ def main() -> int:
                 print(f"Exported structured report: {output}")
             else:
                 print(text)
-            return 0
-        if args.command == "status":
-            summary = task_summary(con, args.task_id)
-            print_json(summary) if args.format == "json" else print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
     except (OSError, sqlite3.Error, ValueError, json.JSONDecodeError) as exc:
         print(f"task-record error: {exc}", file=sys.stderr)

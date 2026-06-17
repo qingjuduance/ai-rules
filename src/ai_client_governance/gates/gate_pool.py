@@ -18,7 +18,12 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, ai_client_governance_entrypoint, is_correction_path
+from ai_client_governance.common.paths import (
+    PYTHON_PYCACHE_DIR,
+    STRUCTURED_DB_PATH,
+    ai_client_governance_entrypoint,
+    is_correction_path,
+)
 from ai_client_governance.runtime import AgentExecutionContext, default_registry
 
 
@@ -35,6 +40,8 @@ TEXT_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+
+PLACEHOLDER_TASK_ID = "<task-id>"
 
 
 @dataclass(frozen=True)
@@ -125,12 +132,36 @@ def registry_gate_steps(task_types: list[str], changed_paths: list[str], final: 
     context = AgentExecutionContext(
         input_source="tool",
         task_types=tuple(task_types),
-        task_size="medium" if changed_paths else "small",
+        task_size="medium" if changed_paths or task_types else "small",
         changed_paths=tuple(path.replace("\\", "/") for path in changed_paths),
         final=final,
         event=event,
     )
     return set(default_registry().gate_step_ids_for_context(context))
+
+
+def structured_db_args(args: argparse.Namespace, root: Path) -> list[str]:
+    if args.db:
+        return ["--db", args.db]
+    return ["--db", str(host_project_root(root) / STRUCTURED_DB_PATH)]
+
+
+def fact_source_args(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    structured_event: str | None = None,
+) -> list[str]:
+    if args.task_tracking:
+        return ["--task-tracking", args.task_tracking]
+    task_id = args.task_id or (PLACEHOLDER_TASK_ID if args.dry_run else "")
+    if not task_id:
+        raise ValueError("gate-pool requires --task-tracking or --task-id")
+    result = ["--task-id", task_id]
+    result.extend(structured_db_args(args, root))
+    if structured_event:
+        result.extend(["--structured-event", structured_event])
+    return result
 
 
 def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
@@ -152,9 +183,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
         if args.task_tracking:
             worktree_policy_args = ["--task-tracking", args.task_tracking, "--only-worktree-creation-policy"]
         else:
-            worktree_policy_args = ["--task-id", args.task_id, "--structured-event", "preflight"]
-            if args.db:
-                worktree_policy_args.extend(["--db", args.db])
+            worktree_policy_args = fact_source_args(args, root, structured_event="preflight")
         steps.append(
             GateStep(
                 name="ai_client_governance.py task-gate --only-worktree-creation-policy",
@@ -356,14 +385,20 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Final host-project .ai-client architecture boundary gate.",
             )
         )
-    if args.final and "task-gate" in gate_steps:
-        task_gate_args = []
-        if args.task_tracking:
-            task_gate_args.extend(["--task-tracking", args.task_tracking])
-        if args.task_id:
-            task_gate_args.extend(["--task-id", args.task_id])
-        if args.db:
-            task_gate_args.extend(["--db", args.db])
+    if "task-record" in gate_steps and not args.task_tracking:
+        task_record_args = structured_db_args(args, root)
+        task_record_args.extend(["gate", "--task-id", args.task_id or PLACEHOLDER_TASK_ID])
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py task-record gate",
+                phase="final-gate" if args.final else "preflight",
+                command=cli_command(py, entrypoint, "task-record", *task_record_args),
+                final_gate=args.final,
+                reason="Structured SQLite task record is the task evidence source for new tasks.",
+            )
+        )
+    if args.final and "task-gate" in gate_steps and (args.task_tracking or not args.task_id):
+        task_gate_args = fact_source_args(args, root)
         steps.append(
             GateStep(
                 name="ai_client_governance.py task-gate",
@@ -382,13 +417,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
         )
     if args.final and "session-gate" in gate_steps:
         session_root = host_project_root(root)
-        session_gate_args = []
-        if args.task_tracking:
-            session_gate_args.extend(["--task-tracking", args.task_tracking])
-        if args.task_id:
-            session_gate_args.extend(["--task-id", args.task_id])
-        if args.db:
-            session_gate_args.extend(["--db", args.db])
+        session_gate_args = fact_source_args(args, root)
         steps.append(
             GateStep(
                 name="ai_client_governance.py session-gate",
@@ -434,11 +463,9 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     reason="Final task queue state gate.",
                 )
             )
-        elif args.task_id:
-            task_record_args = []
-            if args.db:
-                task_record_args.extend(["--db", args.db])
-            task_record_args.extend(["gate", "--task-id", args.task_id])
+        elif (args.task_id or args.dry_run) and "task-record" not in gate_steps:
+            task_record_args = structured_db_args(args, root)
+            task_record_args.extend(["gate", "--task-id", args.task_id or PLACEHOLDER_TASK_ID])
             steps.append(
                 GateStep(
                     name="ai_client_governance.py task-record gate",
@@ -624,7 +651,7 @@ def run_step(
 
 def main() -> int:
     args = parse_args()
-    if not args.task_tracking and not args.task_id:
+    if not args.task_tracking and not args.task_id and not args.dry_run:
         raise SystemExit("gate-pool requires --task-tracking or --task-id")
     root = Path(args.root).resolve()
     user_trace_id = args.trace_id or ""

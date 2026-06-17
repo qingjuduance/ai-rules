@@ -323,6 +323,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--approved-label", help="Approval label, for example 批准：计划-生命周期状态机门禁.")
     parser.add_argument("--trace-id", help="Trace id. Default: generated or inferred from state file.")
     parser.add_argument("--state-file", help="Lifecycle state JSON path. Default: .ai-client/project/lifecycle/<trace>.json.")
+    parser.add_argument(
+        "--write-state",
+        action="store_true",
+        help="Persist lifecycle state. classify stays read-only unless this or --state-file is provided.",
+    )
     parser.add_argument("--event", choices=sorted(NODE_EVENTS), help="Runtime event boundary. Default is inferred from lifecycle command.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
 
@@ -505,6 +510,12 @@ def save_state(report: LifecycleReport, args: argparse.Namespace) -> None:
     report.state_file = rel_path(path, root)
 
 
+def should_save_state(args: argparse.Namespace) -> bool:
+    if args.command != "classify":
+        return True
+    return bool(getattr(args, "write_state", False) or getattr(args, "state_file", None))
+
+
 def run_command(command: list[str], root: Path) -> tuple[int, str]:
     env = os.environ.copy()
     env["PYTHONPYCACHEPREFIX"] = str(root / PYTHON_PYCACHE_DIR)
@@ -614,7 +625,8 @@ def main() -> int:
         run_final_gates(args, report)
         if not report.errors:
             report.state = "finalized" if args.run_gates else "final_gate_planned"
-    save_state(report, args)
+    if should_save_state(args):
+        save_state(report, args)
     print(format_json(report) if args.format == "json" else format_text(report))
     return 1 if report.errors else 0
 

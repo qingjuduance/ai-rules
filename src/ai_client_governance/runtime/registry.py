@@ -500,7 +500,7 @@ def default_components() -> list[ComponentDefinition]:
             requires_facts=("task_id", "structured_task_record"),
             produces_facts=("structured_task_record_gate_result",),
             gate_label="ai_client_governance.py task-record gate",
-            gate_step="task-gate",
+            gate_step="task-record",
             fail_policy="fail_closed",
             condition="Run when a structured task id exists; fail before final output if required rows are missing.",
             performance_budget="single SQLite read; no Markdown parsing",

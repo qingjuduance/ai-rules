@@ -30,7 +30,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **结构化事实优先于 Markdown 反解析**：新任务先写 SQLite 事实源
   `.ai-client/project/state/aicg.db`，再按需导出 Markdown 报告；不能把机器门禁依赖
   建在散文和 Markdown 表格的事后反解析上。
-- **修改必有隔离与证据**：修改型任务默认通过 worktree、task tracking、写锁、
+- **修改必有隔离与证据**：修改型任务默认通过 worktree、结构化 task record、写锁、
   工具账本、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
 - **项目特化不污染通用层**：目标项目的业务、简历、学习路线、源码快照、目录结构、
   本地交付规则和私有偏好留在 `.ai-client/project/` 或项目原生资产中；通用仓库只收纳
@@ -40,7 +40,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **同步检查只审计，不替人决策**：同步脚本可以发现 missing、dirty、ahead、behind
   或 diverged，但不自动 pull、push、merge 或删除；需要回写时进入对应 Git 仓库按
   普通 Git 边界处理。
-- **live state 优先于快照**：task tracking、state 文件和日志用于恢复现场；最终判断
+- **live state 优先于快照**：结构化 task record、state 文件和日志用于恢复现场；最终判断
   worktree、Git、session、lock 和 queue 状态时，必须重新核对 live state。
 - **跨客户端可移植**：新增规则和能力默认使用 agent-neutral 语义；只有明确属于某个
   客户端或 skill 的局部适配，才写入工具私有细节。
@@ -191,12 +191,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   完成测试走 `completion-test`，最终回复走 `final-output`，恢复任务走 `resume`，
   合并清理走 `merge-cleanup`。
 - `gate-pool` 以 `gate_step` 聚合同类门禁；多个组件指向同一 `gate_step` 时，
-  应聚合 changed paths 后运行一次，并在 dry-run、trace 或 task tracking 中可见。
+  应聚合 changed paths 后运行一次，并在 dry-run、trace 或结构化 task record 中可见。
 
 ## 结构化任务记录、Task Tracking 与恢复现场
 
 - 中/大任务、修改型任务、规则/脚本/skill、文档、Git、简历、long-running、
-  multi-agent 或 correction 任务必须有 task tracking。
+  multi-agent 或 correction 任务必须有结构化 task record。
 - 新任务的机器事实优先写入 `.ai-client/project/state/aicg.db`。入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record ...`。
 - 执行前必须先用 `contract describe` 明确本任务必填字段、枚举、gate 和
@@ -204,15 +204,17 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - `task-record apply --json <file>` 是结构化写入入口；它必须在落库前校验
   `tasks`、`requirements`、`triggers`、`outputs`、`worktrees`、`validations`
   的必填字段、枚举和外键。校验失败不得生成半成品记录。
-- `task-gate --task-id <task-id>` 和 `session-gate --task-id <task-id>` 优先读取
-  SQLite 事实源；Markdown task tracking 只作为历史审计、恢复说明和可读报告。
+- `task-gate --task-id <task-id>` 和 `session-gate --task-id <task-id>` 读取
+  SQLite 事实源；Markdown task tracking 只作为历史审计和 `task-record export-md`
+  生成的人类可读报告，不作为新任务机器门禁输入。
 - task tracking Markdown 导出或历史记录放在 `.ai-client/project/records/task-tracking/`。
 - pending 恢复入口放在 `.ai-client/project/records/pending-tasks/`。
 - correction 记录放在 `.ai-client/project/records/corrections/`。
 - 运行态、日志和账本放在 `.ai-client/project/state/`、`.ai-client/project/logs/`
   和 `.ai-client/project/tmp/`，不写回通用仓库。
-- task tracking 至少记录：用户输入拆解、用户要求、触发日志、任务类型、worktree 证据、
-  Worktree 完成记录、影响面、操作账本、验证记录、DoD、Git 状态和恢复现场。
+- 结构化 task record 至少记录：用户输入拆解、用户要求、触发日志、任务类型、
+  worktree 证据、Worktree 完成记录、影响面、操作账本、验证记录、DoD、Git 状态
+  和恢复现场。
 - 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
 - 模板由程序输出：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates task-tracking`。
@@ -222,7 +224,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 每轮执行和收口前必须选择实际命中的任务类型：
   `code-debug`、`correction`、`rules-script`、`docs`、`git`、`frontend`、
   `resume`、`multi-agent`、`long-running`。
-- 任务类型不是标签装饰；选中后必须在 task tracking 写证据。
+- 任务类型不是标签装饰；选中后必须在结构化 task record 写证据。
 - `rules-script` 默认要求联网核对外部成熟做法；不能只口头声称参考过。
 - 任务门禁入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate ...`。
@@ -275,7 +277,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 新文档、重构、README/索引/引用维护必须做影响面扫描、循环引用检查和 DoD。
 - 功能、脚本、规则、skill、manifest 或入口 adapter 改动后，必须进入 post-change
   文档影响面节点：判断是否需要同步 README、命令说明、manifest、规则入口、索引或引用记录。
-- 如果影响文档，必须先更新相关文档和引用；如果判断不影响，必须在 task tracking
+- 如果影响文档，必须先更新相关文档和引用；如果判断不影响，必须在结构化 task record
   记录 no-impact 理由，不能静默跳过。
 - 文档影响面和引用反查默认由 `gate-pool` 聚合触发一次
   `ai_client_governance.py doc-index check --changed-path ...`；不要对同一 changed-path 集合重复跑同一节点。

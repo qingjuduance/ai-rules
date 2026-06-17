@@ -1423,8 +1423,10 @@ def main() -> int:
     root = Path(args.root).resolve()
     if args.task_id:
         db = structured_task_record.db_path(root, args.db)
-        con = structured_task_record.connect(db)
-        structured_task_record.init_db(con)
+        if not db.exists():
+            print(f"task-record error: structured DB does not exist: {db}", file=sys.stderr)
+            return 2
+        con = structured_task_record.connect(db, create=False)
         structured_report = structured_task_record.validate_task(
             con=con,
             db=db,

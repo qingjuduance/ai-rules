@@ -633,30 +633,39 @@ def main() -> int:
     )
     if args.task_id:
         db = structured_task_record.db_path(root, args.db)
-        con = structured_task_record.connect(db)
-        structured_task_record.init_db(con)
-        structured_report = structured_task_record.validate_task(
-            con=con,
-            db=db,
-            task_id=args.task_id,
-            event="final",
-            explicit_task_types=args.task_types or [],
+        if not db.exists():
+            add(report.errors, "error", f"Structured task DB does not exist: {db}")
+        else:
+            con = structured_task_record.connect(db, create=False)
+            structured_report = structured_task_record.validate_task(
+                con=con,
+                db=db,
+                task_id=args.task_id,
+                event="final",
+                explicit_task_types=args.task_types or [],
+            )
+            for item in structured_report.errors:
+                add(report.errors, "error", f"Structured task gate: {item.message}", item.table)
+            for item in structured_report.warnings:
+                add(report.warnings, "warning", f"Structured task gate: {item.message}", item.table)
+            for item in structured_report.notes:
+                add(report.notes, "note", f"Structured task gate: {item.message}", item.table)
+    if args.task_id:
+        add(
+            report.notes,
+            "note",
+            "Structured task id supplied; Markdown task tracking gate is not required for task evidence.",
         )
-        for item in structured_report.errors:
-            add(report.errors, "error", f"Structured task gate: {item.message}", item.table)
-        for item in structured_report.warnings:
-            add(report.warnings, "warning", f"Structured task gate: {item.message}", item.table)
-        for item in structured_report.notes:
-            add(report.notes, "note", f"Structured task gate: {item.message}", item.table)
-    validate_task_gate(
-        root=root,
-        tracking_arg=args.task_tracking,
-        task_types=args.task_types,
-        require_task_gate=args.require_task_gate,
-        errors=report.errors,
-        warnings=report.warnings,
-        notes=report.notes,
-    )
+    else:
+        validate_task_gate(
+            root=root,
+            tracking_arg=args.task_tracking,
+            task_types=args.task_types,
+            require_task_gate=args.require_task_gate,
+            errors=report.errors,
+            warnings=report.warnings,
+            notes=report.notes,
+        )
 
     if args.format == "json":
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
