@@ -143,6 +143,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   对比 coord session、lock 和 queue。active session 指向不存在的 worktree 必须阻塞；
   只有显式运行 `--mark-missing-stale` 才能把这类 session 标记为
   `stale_or_missing_worktree` 并释放相关 active lock。
+- `worktree-task closeout-all` 移除任务 worktree 后，必须在同一脚本链路关闭该
+  worktree 对应的 active coord session 并释放 active lock；脚本生成的 closeout
+  残留不能要求 AI 或用户手工改运行态账本。
 - worktree 合并收口任务的最终 live gate 必须使用
   `worktree-task finalize --require-merged --require-no-task-worktrees` 或等价检查，
   确认没有残留任务 worktree；如因明确保留策略跳过该强门禁，必须记录原因和恢复方式。

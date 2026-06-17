@@ -1069,6 +1069,23 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                     repo=repo_name,
                     task_slug=task_slug,
                 )
+                closed_sessions, released_locks = close_coord_sessions_for_worktree(
+                    source_repo,
+                    Path(str(task["worktree_path"])),
+                )
+                add_closeout_step(
+                    plan,
+                    action="close-coord-session",
+                    repo=repo_name,
+                    task_slug=task_slug,
+                    status="done" if closed_sessions else "skipped",
+                    command=["worktree-task", "closeout-all", "close-coord-session"],
+                    detail=(
+                        f"closed_sessions={','.join(closed_sessions)} released_locks={released_locks}"
+                        if closed_sessions
+                        else "no active coord session matched removed worktree"
+                    ),
+                )
                 git_run(["worktree", "prune"], source_repo, check=False)
                 if ref_exists(source_repo, f"refs/heads/{branch}"):
                     if merged_to_target(source_repo, branch, args.target_ref) is not True:
@@ -1378,6 +1395,51 @@ def mark_missing_sessions_stale(repo_path: Path, report: dict[str, Any]) -> list
                     }
                 )
     return repaired
+
+
+def close_coord_sessions_for_worktree(repo_path: Path, worktree_path: Path) -> tuple[list[str], int]:
+    """Close active coord sessions owned by a worktree removed by closeout-all."""
+    removed_path = str(worktree_path.resolve()).casefold()
+    store = StateStore(git_common_dir(repo_path))
+    closed: list[str] = []
+    released = 0
+    released_by_session: dict[str, int] = {}
+    with GuardedState(store) as guarded:
+        state = guarded.read()
+        sessions = state.get("sessions", {})
+        for session_id, session in sorted(sessions.items()):
+            if not isinstance(session, dict) or not coord_record_is_active(session):
+                continue
+            raw_worktree = str(session.get("worktree", ""))
+            if not raw_worktree:
+                continue
+            session_worktree = str(Path(raw_worktree).resolve()).casefold()
+            if session_worktree != removed_path:
+                continue
+            session["status"] = "closed_by_closeout"
+            session["updated_at"] = now_iso()
+            session["closeout_note"] = "closeout-all removed the recorded task worktree and closed this session."
+            session_released = 0
+            for lock in state.get("locks", []):
+                if isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active":
+                    lock["status"] = "released_by_closeout"
+                    lock["updated_at"] = now_iso()
+                    released += 1
+                    session_released += 1
+            closed.append(str(session_id))
+            released_by_session[str(session_id)] = session_released
+        if closed:
+            guarded.write(state)
+            for session_id in closed:
+                guarded.append_event(
+                    {
+                        "event": "session.close_by_closeout",
+                        "session_id": session_id,
+                        "released_locks": released_by_session.get(session_id, 0),
+                        "worktree": str(worktree_path.resolve()),
+                    }
+                )
+    return closed, released
 
 
 def status_state_path(project_root: Path, output: str | None) -> Path:

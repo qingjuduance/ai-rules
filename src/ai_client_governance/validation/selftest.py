@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +72,12 @@ def remove_tree(path: Path) -> None:
         func(failed_path)  # type: ignore[operator]
 
     shutil.rmtree(path, onerror=onerror)
+
+
+def write_text_lf(path: Path, value: str) -> None:
+    """Write text fixtures with LF endings so git diff --check is platform-stable."""
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(value)
 
 
 def output_gate_rows(worktree_variant: str = "complete") -> str:
@@ -1635,6 +1642,169 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -> TestResult:
+    sandbox = Path(tempfile.mkdtemp(prefix="aicg-closeout-"))
+    project = sandbox / "p"
+    governance = project / ".ai-client" / "ai-client-governance"
+    worktree = project / ".ai-client" / "project" / ".worktree" / "closeout-session"
+    session_id = "S-SELFTEST-CLOSEOUT"
+    (project / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+    (governance / "scripts").mkdir(parents=True, exist_ok=True)
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    write_text_lf(project / "README.md", "# selftest\n")
+    write_text_lf(project / ".gitignore", ".ai-client/project/.worktree/\n")
+    write_text_lf(project / ".ai-client" / "project" / ".gitkeep", "")
+    write_text_lf(governance / "AGENTS.md", "# governance selftest\n")
+    write_text_lf(
+        governance / "scripts" / "ai_client_governance.py",
+        "import sys\n"
+        "if '--list' in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == 'sync-check'):\n"
+        "    print('selftest governance stub')\n"
+        "raise SystemExit(0)\n",
+    )
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=project, env_root=root),
+        run_command(["git", "init", "-b", "main"], cwd=governance, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=governance, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=governance, env_root=root),
+        run_command(["git", "add", "AGENTS.md", "scripts/ai_client_governance.py"], cwd=governance, env_root=root),
+        run_command(["git", "commit", "-m", "init governance selftest"], cwd=governance, env_root=root),
+        run_command(
+            ["git", "add", ".gitignore", "README.md", ".ai-client/project/.gitkeep", ".ai-client/ai-client-governance"],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(["git", "commit", "-m", "init closeout coord host"], cwd=project, env_root=root),
+        run_command(["git", "worktree", "add", "-b", "codex/closeout-session", str(worktree)], cwd=governance, env_root=root),
+    ]
+    if not worktree.exists():
+        return TestResult(
+            name="worktree-closeout-all-closes-coord-session",
+            passed=False,
+            summary="test setup failed to create the task worktree",
+            commands=commands,
+        )
+    write_text_lf(worktree / "AGENTS.md", "# governance selftest\n\ncoord closeout\n")
+    commands.extend(
+        [
+            run_command(["git", "add", "AGENTS.md"], cwd=worktree, env_root=root),
+            run_command(["git", "commit", "-m", "update from task worktree"], cwd=worktree, env_root=root),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "worktree-coord",
+                    "session",
+                    "register",
+                    "--session-id",
+                    session_id,
+                    "--title",
+                    "closeout coord selftest",
+                    "--task",
+                    "closeout-session",
+                    "--scope",
+                    "AGENTS.md",
+                ],
+                cwd=worktree,
+                env_root=root,
+            ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "worktree-coord",
+                    "lock",
+                    "acquire",
+                    "--session-id",
+                    session_id,
+                    "--scope",
+                    "AGENTS.md",
+                    "--reason",
+                    "selftest closeout lock",
+                ],
+                cwd=worktree,
+                env_root=root,
+            ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "worktree-task",
+                    "closeout-all",
+                    "--project-root",
+                    str(project),
+                    "--repo",
+                    "ai-client-governance",
+                    "--execute",
+                    "--format",
+                    "json",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "worktree-task",
+                    "reconcile",
+                    "--project-root",
+                    str(project),
+                    "--repo",
+                    "ai-client-governance",
+                    "--strict",
+                    "--format",
+                    "json",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
+        ]
+    )
+    closeout_payload: dict[str, object] = {}
+    reconcile_payload: dict[str, object] = {}
+    try:
+        closeout_payload = json.loads(commands[-2].stdout)
+        reconcile_payload = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass
+    state_path = governance / ".git" / "ai-client-runtime" / "worktree-coord" / "state.json"
+    coord_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    session = coord_state.get("sessions", {}).get(session_id, {})
+    locks = coord_state.get("locks", [])
+    execution = closeout_payload.get("execution", []) if isinstance(closeout_payload, dict) else []
+    close_steps = [
+        item for item in execution
+        if isinstance(item, dict) and item.get("action") == "close-coord-session"
+    ]
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and bool(close_steps)
+        and close_steps[-1].get("status") == "done"
+        and isinstance(session, dict)
+        and session.get("status") == "closed_by_closeout"
+        and all(
+            not (isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active")
+            for lock in locks
+        )
+        and reconcile_payload.get("errors") == []
+    )
+    if passed and sandbox.exists():
+        remove_tree(sandbox)
+    return TestResult(
+        name="worktree-closeout-all-closes-coord-session",
+        passed=passed,
+        summary=(
+            "closeout-all closes coord sessions and releases locks for removed task worktrees"
+            if passed
+            else "closeout-all left stale coord session or lock state after removing a task worktree"
+        ),
+        commands=commands,
+    )
+
+
 def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
     lines = [
         "ai-client-governance Selftest Report",
@@ -1675,6 +1845,7 @@ def main() -> int:
         test_task_run_dag_cache_diagnostics(root, run_dir),
         test_shell_adapter_scope_diagnostics(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
+        test_worktree_closeout_all_closes_coord_session(root, run_dir),
     ]
     passed = all(result.passed for result in results)
 

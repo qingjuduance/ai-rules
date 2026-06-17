@@ -641,7 +641,8 @@ live status 校验。
 coord session、active locks 和 integration queue。如果 coord 仍认为某个 session
 active，但 Git 已经没有对应 worktree，会直接失败。只有显式传
 `--mark-missing-stale` 时，它才会把这类 session 标记为
-`stale_or_missing_worktree` 并释放关联 active lock。
+`stale_or_missing_worktree` 并释放关联 active lock。这个 repair flag 面向外部手工删除、
+历史损坏或 break-glass 清理；正常 closeout-owned worktree 不能依赖它收口。
 
 ```powershell
 python scripts\ai_client_governance.py worktree-task reconcile --strict
@@ -674,8 +675,10 @@ target 分支、宿主仓库存在非收口路径脏改动或 merge conflict。
 执行模式会合并未合并分支、移除已收口 worktree、删除已合并本地任务分支，刷新
 `.ai-client/project/state/worktrees.json`，运行 CLI list、`git diff --check` 和
 sync-check，并只 stage/commit 宿主 gitlink、worktree state、sync state 和显式传入的
-`--task-tracking` 路径。`closeout-all` 不执行 `git push`；push 必须作为后续单独步骤，
-在用户明确批准远端边界后进入对应仓库执行。
+`--task-tracking` 路径。移除任务 worktree 后，它会同步关闭该 worktree 对应的 active
+coord session 并释放 active lock，确保后续 `worktree-task reconcile --strict` 不需要
+再用 repair flag 清理 closeout 自己生成的残留。`closeout-all` 不执行 `git push`；push
+必须作为后续单独步骤，在用户明确批准远端边界后进入对应仓库执行。
 
 嵌入式 `ai-client-governance` 是宿主仓库的 submodule 时，合并 `ai-client-governance` 任务 worktree 还会改变
 宿主仓库记录的 gitlink。这个收口不能只在 `.ai-client/ai-client-governance/` 子仓库内完成：
