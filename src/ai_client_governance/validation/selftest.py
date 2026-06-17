@@ -1234,6 +1234,113 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
     )
 
 
+def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult:
+    ledger_dir = run_dir / "task-run-ledger"
+    cache_dir = run_dir / "task-run-cache"
+    validation_command = "python scripts/ai_client_governance.py validate-encoding --root . --paths README.md --strict"
+    run_base = [
+        sys.executable,
+        str(ai_client_governance_entrypoint()),
+        "task-run",
+        "--root",
+        str(root),
+        "run",
+        "--task-id",
+        "TASK-RUN-DAG-SELFTEST",
+        "--task-type",
+        "rules-script",
+        "--event",
+        "write-intent",
+        "--cache",
+        "--cache-dir",
+        str(cache_dir),
+        "--input-path",
+        "README.md",
+        "--ledger-dir",
+        str(ledger_dir),
+        "--format",
+        "json",
+        "--command",
+        validation_command,
+    ]
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "components",
+                "--event",
+                "write-intent",
+                "--task-type",
+                "rules-script",
+                "--task-size",
+                "medium",
+                "--kind",
+                "processing-interceptor",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(run_base, cwd=root, env_root=root),
+        run_command(run_base, cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "--root",
+                str(root),
+                "diagnose",
+                "--ledger-dir",
+                str(ledger_dir),
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    component_output = commands[0].stdout + commands[0].stderr
+    first_output = commands[1].stdout + commands[1].stderr
+    second_output = commands[2].stdout + commands[2].stderr
+    first: dict[str, object] = {}
+    second: dict[str, object] = {}
+    diagnose: dict[str, object] = {}
+    try:
+        first = json.loads(commands[1].stdout)
+        second = json.loads(commands[2].stdout)
+        diagnose = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    first_summary = first.get("summary", {}) if isinstance(first.get("summary"), dict) else {}
+    second_summary = second.get("summary", {}) if isinstance(second.get("summary"), dict) else {}
+    ledger = diagnose.get("ledger", {}) if isinstance(diagnose.get("ledger"), dict) else {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "preflight.interceptor.task-run-dag" in component_output
+        and int(first_summary.get("cache_misses", 0)) == 1
+        and int(second_summary.get("cache_hits", 0)) == 1
+        and "\"status\": \"cache-hit\"" in second_output
+        and "\"ledger_path\"" in first_output
+        and int(ledger.get("event_count", 0)) >= 4
+        and not ledger.get("duplicate_commands")
+        and not ledger.get("failures")
+    )
+    return TestResult(
+        name="task-run-dag-cache-diagnostics",
+        passed=passed,
+        summary=(
+            "task-run run writes ledger events, reuses safe cache on the second validation, and diagnose reports clean ledger health"
+            if passed
+            else "task-run DAG/cache/diagnostics regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     project = run_dir / "closeout-all-project"
     (project / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
@@ -1335,6 +1442,7 @@ def main() -> int:
         test_structured_task_record_gate(root, run_dir),
         test_lifecycle_input_filter_preflight(root, run_dir),
         test_task_run_command_compression_plan(root, run_dir),
+        test_task_run_dag_cache_diagnostics(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
     ]
     passed = all(result.passed for result in results)

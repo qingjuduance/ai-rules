@@ -146,7 +146,13 @@ def build_contract(task_types: list[str], event: str) -> Contract:
             "events[event_type=command-compression.analysis].payload.decision",
             mutating or normalized != [],
             "string",
-            "Pre-command analysis of whether generated local commands can be deduped, batched, cached, or routed through a local runner.",
+            "Pre-command analysis of whether generated local commands can be deduped, batched, cached, or routed through task-run.",
+        ),
+        field(
+            "events[event_type=command-compression.analysis].payload.groups",
+            mutating or normalized != [],
+            "json",
+            "Machine-readable command groups for task-run run, including parallel/cache/order boundaries.",
         ),
     ]
     if mutating:
@@ -193,6 +199,9 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         gate_requirements.append(
             "Mutating work must persist events.event_type=command-compression.analysis before write-intent or final gates."
         )
+        gate_requirements.append(
+            "Important local commands should run through task-run run, gate-pool, or tool-invocations so command ledger evidence exists."
+        )
     if "rules-script" in normalized:
         gate_requirements.append("rules-script tasks require task.approval_label plus an approved approvals[] row with the same label.")
     if "docs" in normalized:
@@ -202,6 +211,8 @@ def build_contract(task_types: list[str], event: str) -> Contract:
 
     write_commands = [
         "python <AICG_REPO>/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
+        "python <AICG_REPO>/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent --trace-json <trace.json>",
+        "python <AICG_REPO>/scripts/ai_client_governance.py task-run diagnose --format json",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record init",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record gate --task-id <task-id>",

@@ -195,9 +195,20 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或等价本地分析记录 `event_type=command-compression.analysis`，说明哪些命令被去重、
   合并、并行、交给 gate-pool 或必须按顺序执行。中/大型或修改型任务缺该事件时
   `task-record gate` 必须 fail closed。
-- 重要 shell 命令优先通过 `tool-invocations run`、`gate-pool` 或后续本地 runner 执行，
-  让 `.ai-client/project/logs/tool-invocations/*.jsonl` 可复盘。宿主客户端裸 shell 调用若
-  无法自动拦截，必须在 task record 中记录原因或用显式 wrapper 补账。
+- 命令压缩分析完成后，优先使用
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run ...`
+  执行确定性本地 DAG：只读/验证组可以并行，显式 `--cache` 时只缓存只读/验证节点；
+  状态变更、Git 写入、锁、task-record apply 和未知副作用命令必须顺序执行且不缓存。
+- `task-run run` 默认写入 `.ai-client/project/logs/tool-invocations/*.jsonl`，并可输出
+  `--trace-json`；`--no-ledger` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动
+  拦截，必须在 task record 中记录原因或改用 `task-run`、`gate-pool`、
+  `tool-invocations run` 补账。
+- 运行状态和资源遗漏检查使用
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
+  它报告命令账本失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
+  自动拦截缺口。
+- 设计新的治理执行结构、缓存策略或观测模型前，必须先联网核对官方或一手资料，
+  并在 task record 记录来源、采用结论和不采用边界。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、
   `condition`、`requires_facts`、`produces_facts`、`effect`、`fail_policy`、
   `dedupe_key` 或 `gate_step`、`performance_budget`。`skill` 只能作为 capability
@@ -365,8 +376,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 声称任务完成前必须运行或记录 completion test 节点：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test ...`。该节点根据
   changed paths、任务类型和验收标准生成测试计划；规则/脚本变更至少覆盖
-  runtime components、gate-pool dry-run 和 selftest，worktree/coord 变更还要覆盖
-  `worktree-task reconcile --strict`。
+  runtime components、gate-pool dry-run、task-run plan/run/diagnose 和 selftest；
+  worktree/coord 变更还要覆盖 `worktree-task reconcile --strict`。
 - Git push 状态不是定时任务；它属于输出边界审计。计划、状态和最终答复前只报告
   dirty/ahead/behind/push 边界，不自动 push，除非用户明确批准推送。
 - 规则/脚本/文档链路变更后，最终记录必须覆盖治理节点是否可见、门禁是否执行、

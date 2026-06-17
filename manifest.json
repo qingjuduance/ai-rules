@@ -38,6 +38,8 @@
       "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter --message <user-message> --task-id <task-id>",
       "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
+      "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent",
+      "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose --format json",
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
       "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id> --event preflight",
@@ -57,13 +59,16 @@
     "mandatoryCommandCompression": {
       "joinPoint": "write-intent",
       "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan",
+      "runnerCommand": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run",
+      "diagnoseCommand": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose",
       "requiredEvent": "command-compression.analysis",
       "appliesTo": [
         "medium-large-tasks",
         "mutating-tasks"
       ],
       "failPolicy": "fail_closed",
-      "ledgerPolicy": "Prefer tool-invocations run, gate-pool, or a local task runner for important shell commands; raw host shell calls must be justified when not automatically intercepted."
+      "cachePolicy": "Cache is opt-in and limited to readonly/validation nodes; stateful, sequential, Git write, lock, task-record apply, git status, git diff, and git worktree list commands are no-cache.",
+      "ledgerPolicy": "task-run run writes tool-invocations JSONL by default; use --no-ledger only for isolated tests. Prefer task-run run, gate-pool, or tool-invocations run for important shell commands; raw host shell calls must be justified when not automatically intercepted."
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -161,6 +166,12 @@
       "report_only"
     ],
     "extensionPolicy": "Add deterministic behavior as registered governance components before expanding prose rules.",
+    "designReferences": {
+      "springAop": "https://docs.spring.io/spring-framework/reference/core/aop/introduction-defn.html",
+      "bazelRemoteCache": "https://bazel.build/remote/cache-remote",
+      "gradleBuildCache": "https://docs.gradle.org/current/userguide/build_cache.html",
+      "openTelemetryTraces": "https://opentelemetry.io/docs/concepts/signals/traces/"
+    },
     "documentImpactPolicy": {
       "phase": "post-change",
       "trigger": "rules, scripts, skills, manifest, README, adapters, or Markdown changes that may affect user-facing docs or references",
@@ -176,6 +187,9 @@
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; task-run plan provides the local dedupe and grouping event payload",
+      "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes ledger events by default, and stores trace JSON when requested",
+      "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write ledger events",
+      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, ledger failures, cache hit/miss counts, coord locks/sessions, missing worktrees, and raw shell interception gaps",
       "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; task-id mode does not require Markdown task tracking",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
@@ -198,6 +212,8 @@
       "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
       "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan",
+      "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run",
+      "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose",
       "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter",
       "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRecord": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record",
