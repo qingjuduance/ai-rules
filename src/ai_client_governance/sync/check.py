@@ -146,9 +146,9 @@ def add_warning(report: SyncReport, message: str, next_action: str | None = None
 
 def check_sync(args: argparse.Namespace) -> SyncReport:
     project = Path(args.target_project_path).resolve()
-    config_path = resolve_path(project, args.config_path, ".codex/ai-client-governance-config.json")
+    config_path = resolve_path(project, args.config_path, ".ai-client/ai-client-governance-config.json")
     config = read_json(config_path) or {}
-    embedded_default = str(config.get("embeddedRepoPath") or ".codex/ai-client-governance")
+    embedded_default = str(config.get("embeddedRepoPath") or ".ai-client/ai-client-governance")
     embedded_repo = resolve_path(project, args.embedded_repo_path, embedded_default)
     state_path = project / AI_CLIENT_GOVERNANCE_STATE_PATH
     state = read_json(state_path)
@@ -251,14 +251,14 @@ def check_sync(args: argparse.Namespace) -> SyncReport:
                 elif report.ahead > 0:
                     add_warning(
                         report,
-                        f"{repo_label} is ahead of {upstream_name} by {report.ahead} commit(s). Push from .codex/ai-client-governance when approved.",
-                        "Push from .codex/ai-client-governance after approval.",
+                        f"{repo_label} is ahead of {upstream_name} by {report.ahead} commit(s). Push from .ai-client/ai-client-governance when approved.",
+                        "Push from .ai-client/ai-client-governance after approval.",
                     )
                 elif report.behind > 0:
                     add_warning(
                         report,
-                        f"{repo_label} is behind {upstream_name} by {report.behind} commit(s). Run git pull --ff-only inside .codex/ai-client-governance.",
-                        "Run git pull --ff-only inside .codex/ai-client-governance after review.",
+                        f"{repo_label} is behind {upstream_name} by {report.behind} commit(s). Run git pull --ff-only inside .ai-client/ai-client-governance.",
+                        "Run git pull --ff-only inside .ai-client/ai-client-governance after review.",
                     )
                 else:
                     report.notes.append(f"{repo_label} is aligned with {upstream_name}.")

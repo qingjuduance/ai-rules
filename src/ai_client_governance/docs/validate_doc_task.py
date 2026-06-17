@@ -354,7 +354,7 @@ def check_markdown_file(
     if (
         path.name.lower() != "readme.md"
         and not is_reference_file(rel)
-        and not rel.startswith(".codex/")
+        and not rel.startswith(".ai-client/")
     ):
         readme = path.parent / "README.md"
         if readme.exists() and rel_path(readme, root) not in selected:
@@ -564,4 +564,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

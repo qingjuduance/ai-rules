@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Unified compatibility entry for ai-client-governance commands.
+# Unified entry for ai-client-governance commands.
 
 from __future__ import annotations
 

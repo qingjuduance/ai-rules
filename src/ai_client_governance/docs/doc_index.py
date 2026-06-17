@@ -28,7 +28,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 SCHEMA_VERSION = 1
-DEFAULT_OUTPUT = Path(".codex") / "project" / "doc-index" / "graph.json"
+DEFAULT_OUTPUT = Path(".ai-client") / "project" / "doc-index" / "graph.json"
 DEFAULT_TARGETS = [
     "README.md",
     "AGENTS.md",
@@ -42,8 +42,8 @@ DEFAULT_TARGETS = [
     ".continue/rules",
     ".roo/rules",
     "docs",
-    ".codex/project/rules/project",
-    ".codex/ai-client-governance/AGENTS.md",
+    ".ai-client/project/rules/project",
+    ".ai-client/ai-client-governance/AGENTS.md",
 ]
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -54,7 +54,7 @@ EXCLUDED_DIR_NAMES = {
     "__pycache__",
     "node_modules",
 }
-EXCLUDED_CODEX_DIRS = {
+EXCLUDED_AI_CLIENT_DIRS = {
     "agent-comm",
     "agent-groups",
     "cache",
@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or check a Markdown document index.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    build = subparsers.add_parser("build", help="Build .codex/project/doc-index/graph.json.")
+    build = subparsers.add_parser("build", help="Build .ai-client/project/doc-index/graph.json.")
     add_common_args(build)
     build.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Index output path.")
 
@@ -185,7 +185,7 @@ def is_excluded(path: Path, root: Path) -> bool:
     rel_parts = path.resolve().relative_to(root.resolve()).parts
     if any(part in EXCLUDED_DIR_NAMES for part in rel_parts):
         return True
-    if len(rel_parts) >= 2 and rel_parts[0] == ".codex" and rel_parts[1] in EXCLUDED_CODEX_DIRS:
+    if len(rel_parts) >= 2 and rel_parts[0] == ".ai-client" and rel_parts[1] in EXCLUDED_AI_CLIENT_DIRS:
         return True
     return False
 
@@ -708,4 +708,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

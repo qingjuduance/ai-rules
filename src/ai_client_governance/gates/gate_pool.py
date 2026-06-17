@@ -49,7 +49,9 @@ class GateStep:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AI Client Governance gates as one traced pool.")
     parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
-    parser.add_argument("--task-tracking", required=True, help="Task tracking file.")
+    parser.add_argument("--task-tracking", help="Task tracking file.")
+    parser.add_argument("--task-id", help="Structured task id to validate from task-record SQLite.")
+    parser.add_argument("--db", help="Structured task-record SQLite path.")
     parser.add_argument("--task-type", action="append", default=[], help="Task type for task/session gates.")
     parser.add_argument("--changed-path", action="append", default=[], help="Path changed by this task.")
     parser.add_argument(
@@ -90,13 +92,13 @@ def rel_or_abs(path: Path, root: Path) -> str:
 
 
 def host_project_root(root: Path) -> Path:
-    """Return the host project root when running inside .codex/project/.worktree."""
+    """Return the host project root when running inside .ai-client/project/.worktree."""
     resolved = root.resolve()
     parts = resolved.parts
     for index in range(len(parts) - 2):
-        if parts[index : index + 3] == (".codex", "project", ".worktree"):
+        if parts[index : index + 3] == (".ai-client", "project", ".worktree"):
             host = Path(*parts[:index])
-            if (host / ".codex" / "project").exists():
+            if (host / ".ai-client" / "project").exists():
                 return host
     return resolved
 
@@ -147,6 +149,12 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
 
     steps: list[GateStep] = []
     if "worktree-creation-policy" in gate_steps:
+        if args.task_tracking:
+            worktree_policy_args = ["--task-tracking", args.task_tracking, "--only-worktree-creation-policy"]
+        else:
+            worktree_policy_args = ["--task-id", args.task_id, "--structured-event", "preflight"]
+            if args.db:
+                worktree_policy_args.extend(["--db", args.db])
         steps.append(
             GateStep(
                 name="ai_client_governance.py task-gate --only-worktree-creation-policy",
@@ -155,9 +163,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     py,
                     entrypoint,
                     "task-gate",
-                    "--task-tracking",
-                    args.task_tracking,
-                    "--only-worktree-creation-policy",
+                    *worktree_policy_args,
                 ),
                 final_gate=args.final,
                 reason=(
@@ -191,10 +197,10 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             str(host_project_root(root)),
             "--repo",
             "ai-client-governance",
-            "--require-task-tracking",
         ]
         if args.task_tracking:
             closeout_args.extend(["--task-tracking", args.task_tracking])
+            closeout_args.append("--require-task-tracking")
         if args.final:
             closeout_args.append("--require-clean-host")
         steps.append(
@@ -302,9 +308,13 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
         completion_args = [
             "--root",
             str(root),
-            "--task-tracking",
-            args.task_tracking,
         ]
+        if args.task_tracking:
+            completion_args.extend(["--task-tracking", args.task_tracking])
+        if args.task_id:
+            completion_args.extend(["--task-id", args.task_id])
+        if args.db:
+            completion_args.extend(["--db", args.db])
         for task_type in task_types:
             completion_args.extend(["--task-type", task_type])
         for path in changed_paths:
@@ -343,10 +353,17 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "--strict",
                 ),
                 final_gate=True,
-                reason="Final host-project .codex architecture boundary gate.",
+                reason="Final host-project .ai-client architecture boundary gate.",
             )
         )
     if args.final and "task-gate" in gate_steps:
+        task_gate_args = []
+        if args.task_tracking:
+            task_gate_args.extend(["--task-tracking", args.task_tracking])
+        if args.task_id:
+            task_gate_args.extend(["--task-id", args.task_id])
+        if args.db:
+            task_gate_args.extend(["--db", args.db])
         steps.append(
             GateStep(
                 name="ai_client_governance.py task-gate",
@@ -355,8 +372,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     py,
                     entrypoint,
                     "task-gate",
-                    "--task-tracking",
-                    args.task_tracking,
+                    *task_gate_args,
                     "--require-task-types",
                     *task_type_args(task_types),
                 ),
@@ -366,6 +382,13 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
         )
     if args.final and "session-gate" in gate_steps:
         session_root = host_project_root(root)
+        session_gate_args = []
+        if args.task_tracking:
+            session_gate_args.extend(["--task-tracking", args.task_tracking])
+        if args.task_id:
+            session_gate_args.extend(["--task-id", args.task_id])
+        if args.db:
+            session_gate_args.extend(["--db", args.db])
         steps.append(
             GateStep(
                 name="ai_client_governance.py session-gate",
@@ -376,9 +399,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "session-gate",
                     "--root",
                     str(session_root),
-                    "--task-tracking",
-                    args.task_tracking,
-                    "--require-task-tracking",
+                    *session_gate_args,
                     "--require-task-gate",
                     *task_type_args(task_types),
                 ),
@@ -386,30 +407,47 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Final session closure gate.",
             )
         )
+        if args.task_tracking:
+            steps[-1].command.append("--require-task-tracking")
     if args.final and "task-queue" in gate_steps:
-        queue_root = host_project_root(root)
-        steps.append(
-            GateStep(
-                name="ai_client_governance.py task-queue",
-                phase="final-gate",
-                command=cli_command(
-                    py,
-                    entrypoint,
-                    "task-queue",
-                    "--root",
-                    str(queue_root),
-                    "validate",
-                    "--current-task-tracking",
-                    args.task_tracking,
-                    "--trace-id",
-                    getattr(args, "task_queue_trace_id", args.trace_id or ""),
-                    "--require-current",
-                    "--strict-fifo",
-                ),
-                final_gate=True,
-                reason="Final task queue state gate.",
+        if args.task_tracking:
+            queue_root = host_project_root(root)
+            steps.append(
+                GateStep(
+                    name="ai_client_governance.py task-queue",
+                    phase="final-gate",
+                    command=cli_command(
+                        py,
+                        entrypoint,
+                        "task-queue",
+                        "--root",
+                        str(queue_root),
+                        "validate",
+                        "--current-task-tracking",
+                        args.task_tracking,
+                        "--trace-id",
+                        getattr(args, "task_queue_trace_id", args.trace_id or ""),
+                        "--require-current",
+                        "--strict-fifo",
+                    ),
+                    final_gate=True,
+                    reason="Final task queue state gate.",
+                )
             )
-        )
+        elif args.task_id:
+            task_record_args = []
+            if args.db:
+                task_record_args.extend(["--db", args.db])
+            task_record_args.extend(["gate", "--task-id", args.task_id])
+            steps.append(
+                GateStep(
+                    name="ai_client_governance.py task-record gate",
+                    phase="final-gate",
+                    command=cli_command(py, entrypoint, "task-record", *task_record_args),
+                    final_gate=True,
+                    reason="Structured task record replaces Markdown task-queue current tracking in task-id mode.",
+                )
+            )
 
     trace_id = args.trace_id or ""
     if trace_id:
@@ -490,7 +528,7 @@ def run_record(
     invocation_id: str,
     trace_id: str,
     status: str,
-    task_tracking: str,
+    task_tracking: str | None,
     task_types: list[str],
     summary: str,
     exit_code: int | None = None,
@@ -507,8 +545,6 @@ def run_record(
         "ai_client_governance.py gate-pool",
         "--status",
         status,
-        "--task-tracking",
-        task_tracking,
         "--phase",
         "gate-pool",
         "--trace-id",
@@ -522,6 +558,8 @@ def run_record(
         "--command",
         "ai_client_governance.py gate-pool run",
     ]
+    if task_tracking:
+        command.extend(["--task-tracking", task_tracking])
     for task_type in task_types:
         command.extend(["--task-type", task_type])
     if exit_code is not None:
@@ -540,7 +578,7 @@ def run_step(
     *,
     trace_id: str,
     parent_id: str,
-    task_tracking: str,
+    task_tracking: str | None,
     task_types: list[str],
     attempt: int,
 ) -> int:
@@ -554,8 +592,6 @@ def run_step(
         "run",
         "--name",
         step.name,
-        "--task-tracking",
-        task_tracking,
         "--phase",
         step.phase,
         "--trace-id",
@@ -571,6 +607,8 @@ def run_step(
         "--summary",
         step.reason or step.name,
     ]
+    if task_tracking:
+        wrapper.extend(["--task-tracking", task_tracking])
     for task_type in task_types:
         wrapper.extend(["--task-type", task_type])
     if step.final_gate:
@@ -586,6 +624,8 @@ def run_step(
 
 def main() -> int:
     args = parse_args()
+    if not args.task_tracking and not args.task_id:
+        raise SystemExit("gate-pool requires --task-tracking or --task-id")
     root = Path(args.root).resolve()
     user_trace_id = args.trace_id or ""
     trace_id = user_trace_id or f"trace-{uuid.uuid4()}"

@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ai_client_governance.common.paths import CORRECTIONS_INDEX, PENDING_INDEX, PYTHON_PYCACHE_DIR
+from ai_client_governance.records import task_record as structured_task_record
 
 LOOP_HEADING = "执行闭环门禁"
 REQUIRED_LOOP_LABELS = ["主任务", "插入任务", "返回动作", "当前状态", "下一步"]
@@ -125,6 +126,14 @@ def parse_args() -> argparse.Namespace:
         "--allow-inserted-task-tracking",
         action="store_true",
         help="Allow a non-linked tracking file when it records the active pending task ID and return action.",
+    )
+    parser.add_argument(
+        "--task-id",
+        help="Structured task id to validate from the SQLite task-record database.",
+    )
+    parser.add_argument(
+        "--db",
+        help="Structured task-record SQLite path. Default: <ai-client-project>/state/aicg.db.",
     )
     return parser.parse_args()
 
@@ -622,6 +631,23 @@ def main() -> int:
         require_tracking=args.require_task_tracking,
         allow_inserted_tracking=args.allow_inserted_task_tracking,
     )
+    if args.task_id:
+        db = structured_task_record.db_path(root, args.db)
+        con = structured_task_record.connect(db)
+        structured_task_record.init_db(con)
+        structured_report = structured_task_record.validate_task(
+            con=con,
+            db=db,
+            task_id=args.task_id,
+            event="final",
+            explicit_task_types=args.task_types or [],
+        )
+        for item in structured_report.errors:
+            add(report.errors, "error", f"Structured task gate: {item.message}", item.table)
+        for item in structured_report.warnings:
+            add(report.warnings, "warning", f"Structured task gate: {item.message}", item.table)
+        for item in structured_report.notes:
+            add(report.notes, "note", f"Structured task gate: {item.message}", item.table)
     validate_task_gate(
         root=root,
         tracking_arg=args.task_tracking,
@@ -646,4 +672,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

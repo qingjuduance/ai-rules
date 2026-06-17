@@ -19,7 +19,7 @@ Read in this order:
 
 1. Current user request and any scope limits.
 2. Repository `AGENTS.md`, then nearer directory instructions if relevant.
-3. Existing `.codex/project/records/corrections/` entries and task tracking only when the
+3. Existing `.ai-client/project/records/corrections/` entries and task tracking only when the
    request asks to promote or audit them.
 4. The target rule section, nearby overlapping rules, and validation scripts or
    README files that already govern the same workflow.
@@ -115,7 +115,7 @@ before editing:
 Before deleting large prose blocks, run the local read-only audit when available:
 
 ```bash
-python .codex/ai-rules/scripts/ai_rules.py rule-audit --paths AGENTS.md README.md --format markdown
+python scripts/ai_client_governance.py rule-audit --paths AGENTS.md README.md --format markdown
 ```
 
 Record the generated migration matrix in task tracking, then edit in small,
@@ -134,13 +134,13 @@ why anything was not promoted. Keep this writeback inside the approved scope.
 After editing a skill, run:
 
 ```bash
-python <skill-creator>/scripts/quick_validate.py .codex/ai-rules/.codex/skills/agents-rule-maintainer
+python <skill-creator>/scripts/quick_validate.py skills/agents-rule-maintainer
 ```
 
 For AGENTS rule edits, also run targeted text checks such as:
 
 ```bash
-rg -n "old-rule-text|new-rule-text" AGENTS.md .codex/project/records/corrections .codex/project/records/task-tracking
+rg -n "old-rule-text|new-rule-text" AGENTS.md .ai-client/project/records/corrections .ai-client/project/records/task-tracking
 ```
 
 Report changed files, validation commands, trigger scenarios, and remaining risk

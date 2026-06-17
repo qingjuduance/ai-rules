@@ -88,24 +88,24 @@ def display_path(path: Path, project_root: Path) -> str:
 
 
 def find_project_root(cwd: Path, explicit: str | None = None) -> Path:
-    """Find the host project root that owns .codex/project."""
+    """Find the host project root that owns .ai-client/project."""
     if explicit:
         root = Path(explicit).expanduser().resolve()
-        if not (root / ".codex" / "project").exists():
-            raise SystemExit(f"project root lacks .codex/project: {root}")
+        if not (root / ".ai-client" / "project").exists():
+            raise SystemExit(f"project root lacks .ai-client/project: {root}")
         return root
     current = cwd.resolve()
     parts = current.parts
     for index in range(len(parts) - 2):
-        if parts[index : index + 3] == (".codex", "project", ".worktree"):
+        if parts[index : index + 3] == (".ai-client", "project", ".worktree"):
             host = Path(*parts[:index])
-            if (host / ".codex" / "project").exists():
+            if (host / ".ai-client" / "project").exists():
                 return host
     for candidate in (current, *current.parents):
-        if (candidate / ".codex" / "project").exists():
+        if (candidate / ".ai-client" / "project").exists():
             return candidate
     repo_root, _ = detect_repo(cwd)
-    if (repo_root / ".codex" / "project").exists():
+    if (repo_root / ".ai-client" / "project").exists():
         return repo_root
     raise SystemExit("Cannot find host project root. Pass --project-root.")
 
@@ -113,7 +113,7 @@ def find_project_root(cwd: Path, explicit: str | None = None) -> Path:
 def source_repo_for(project_root: Path, repo: str) -> Path:
     """Resolve the source Git repository for a task worktree."""
     if repo == "ai-client-governance":
-        source_repo = project_root / ".codex" / "ai-client-governance"
+        source_repo = project_root / ".ai-client" / "ai-client-governance"
     elif repo == "self":
         source_repo = project_root
     else:
@@ -174,7 +174,7 @@ def clean_branch_name(value: str) -> str:
 
 def task_worktree_path(project_root: Path, task_slug: str) -> Path:
     """Return the fixed path for a task worktree."""
-    return project_root / ".codex" / "project" / ".worktree" / task_slug
+    return project_root / ".ai-client" / "project" / ".worktree" / task_slug
 
 
 def normalize_repo_path(value: str) -> str:
@@ -351,7 +351,7 @@ def auto_task_tracking_paths(project_root: Path, task_slug: str | None) -> list[
     """Find likely task tracking files for a task slug."""
     if not task_slug:
         return []
-    tracking_root = project_root / ".codex" / "project" / "records" / "task-tracking"
+    tracking_root = project_root / ".ai-client" / "project" / "records" / "task-tracking"
     if not tracking_root.exists():
         return []
     matches = sorted(tracking_root.glob(f"*{task_slug}*.md"))
@@ -395,7 +395,7 @@ def build_host_closeout_report(
         issues.append("host closeout currently applies only to the embedded ai-client-governance repository")
 
     source_repo = source_repo_for(project_root, repo)
-    embedded_path = ".codex/ai-client-governance"
+    embedded_path = ".ai-client/ai-client-governance"
     embedded_head = current_head(source_repo)
     gitlink = host_gitlink_record(project_root, embedded_path)
     gitlink_head = gitlink.get("head_full_at_index", "")
@@ -407,10 +407,10 @@ def build_host_closeout_report(
             f"but embedded ai-client-governance HEAD is {embedded_head[:7]}"
         )
 
-    state_path = project_root / ".codex" / "project" / "state" / "worktrees.json"
+    state_path = project_root / ".ai-client" / "project" / "state" / "worktrees.json"
     state_head = state_ai_client_governance_head(state_path)
     if not state_path.exists():
-        issues.append("host worktree state file is missing: .codex/project/state/worktrees.json")
+        issues.append("host worktree state file is missing: .ai-client/project/state/worktrees.json")
     elif state_head != embedded_head:
         issues.append(
             "host worktree state is not refreshed for embedded ai-client-governance HEAD "
@@ -445,7 +445,7 @@ def build_host_closeout_report(
 
     relevant_paths = [
         embedded_path,
-        ".codex/project/state/worktrees.json",
+        ".ai-client/project/state/worktrees.json",
         *[project_relative_status_path(project_root, path) for path in tracking_paths],
     ]
     relevant_status = status_for_paths(project_root, relevant_paths)
@@ -469,7 +469,7 @@ def build_host_closeout_report(
         "issues": issues,
         "next_actions": [
             "run worktree-task status --write-state after merging ai-client-governance worktrees",
-            "commit the host .codex/ai-client-governance gitlink, .codex/project/state/worktrees.json, and task tracking record",
+            "commit the host .ai-client/ai-client-governance gitlink, .ai-client/project/state/worktrees.json, and task tracking record",
             "rerun worktree-task host-closeout --require-clean-host before final reply",
         ],
     }
@@ -517,9 +517,9 @@ def build_status_snapshot(
     """Build a machine-readable status snapshot for all task worktrees."""
     repos = [
         ("self", project_root),
-        ("ai-client-governance", project_root / ".codex" / "ai-client-governance"),
+        ("ai-client-governance", project_root / ".ai-client" / "ai-client-governance"),
     ]
-    worktree_base = project_root / ".codex" / "project" / ".worktree"
+    worktree_base = project_root / ".ai-client" / "project" / ".worktree"
     snapshot: dict[str, Any] = {
         "schema_version": 4,
         "last_updated": now_iso(),
@@ -527,32 +527,32 @@ def build_status_snapshot(
         "core_principle": "一切流程化 + 可审计",
         "snapshot_semantics": {
             "kind": "committed_audit_snapshot",
-            "live_state_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
+            "live_state_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
             "head_fields": "HEAD fields are observed at snapshot generation time. Committing this state file can advance the main repository HEAD, so rerun the live_state_command for live truth.",
             "status_fields": "Status is calculated with the output state file ignored to avoid self-dirty snapshots.",
         },
         "audit_policy": {
-            "worktree_state_source": ".codex/project/state/worktrees.json",
-            "script_entry": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
+            "worktree_state_source": ".ai-client/project/state/worktrees.json",
+            "script_entry": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
             "require_commit_before_merge": True,
             "require_state_snapshot_before_closeout": True,
             "require_live_status_rerun_before_final_reply": True,
-            "queue_before_merge_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task queue",
-            "merge_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task merge --execute",
-            "worktree_cleanup_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task remove --execute",
-            "pre_finalize_gate_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task finalize",
+            "queue_before_merge_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task queue",
+            "merge_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task merge --execute",
+            "worktree_cleanup_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task remove --execute",
+            "pre_finalize_gate_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task finalize",
             "full_cleanup_finalize_gate_command": (
-                "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task finalize "
+                "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task finalize "
                 "--require-merged --require-no-task-worktrees"
             ),
-            "branch_cleanup_command": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task cleanup-branch --execute",
+            "branch_cleanup_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task cleanup-branch --execute",
             "host_closeout_command": (
-                "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout "
+                "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout "
                 "--repo ai-client-governance --require-task-tracking --require-clean-host"
             ),
             "embedded_ai_client_governance_merge_closeout": (
                 "After merging an ai-client-governance task worktree, the host repository must commit "
-                ".codex/ai-client-governance gitlink, .codex/project/state/worktrees.json, and related task tracking."
+                ".ai-client/ai-client-governance gitlink, .ai-client/project/state/worktrees.json, and related task tracking."
             ),
         },
     }
@@ -617,7 +617,7 @@ def coord_record_is_active(item: dict[str, Any]) -> bool:
 
 def read_coord_state(repo_path: Path) -> dict[str, Any]:
     """Read worktree-coord state for a Git repository."""
-    state_path = git_common_dir(repo_path) / "codex-runtime" / "worktree-coord" / "state.json"
+    state_path = git_common_dir(repo_path) / "ai-client-runtime" / "worktree-coord" / "state.json"
     if not state_path.exists():
         return {"sessions": {}, "locks": [], "queue": [], "state_file": str(state_path)}
     data = json.loads(state_path.read_text(encoding="utf-8"))
@@ -785,7 +785,7 @@ def mark_missing_sessions_stale(repo_path: Path, report: dict[str, Any]) -> list
 
 def status_state_path(project_root: Path, output: str | None) -> Path:
     """Resolve the status snapshot output path."""
-    path = Path(output).expanduser() if output else project_root / ".codex" / "project" / "state" / "worktrees.json"
+    path = Path(output).expanduser() if output else project_root / ".ai-client" / "project" / "state" / "worktrees.json"
     if not path.is_absolute():
         path = project_root / path
     return path
@@ -1236,24 +1236,24 @@ def command_merge(args: argparse.Namespace) -> int:
     print(f"Merged {branch} into {args.target_ref}")
     print("Next cleanup after verifying the merge:")
     print(
-        "  python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task remove "
+        "  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task remove "
         f"--repo {args.repo} --task-slug {args.task_slug} --execute"
     )
     print(
-        "  python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task cleanup-branch "
+        "  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task cleanup-branch "
         f"--repo {args.repo} --task-slug {args.task_slug} --execute"
     )
     if args.repo == "ai-client-governance":
         print("Host repository closeout is also required for embedded ai-client-governance merges:")
-        print("  python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state")
+        print("  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state")
         host_cmd = (
-            "  python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout "
+            "  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout "
             f"--repo ai-client-governance --task-slug {args.task_slug} --require-task-tracking"
         )
         for tracking_path in args.task_tracking or []:
             host_cmd += f" --task-tracking {tracking_path}"
         print(host_cmd)
-        print("  git add .codex/ai-client-governance .codex/project/state/worktrees.json <related task tracking>")
+        print("  git add .ai-client/ai-client-governance .ai-client/project/state/worktrees.json <related task tracking>")
 
     if args.queue_item:
         mark_cmd = [
@@ -1471,7 +1471,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # create
     create = subparsers.add_parser("create", help="Create a new task worktree.")
-    create.add_argument("--project-root", help="Host project root containing .codex/project.")
+    create.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     create.add_argument("--title", required=True, help="Task title.")
     create.add_argument("--repo", choices=["self", "ai-client-governance"], required=True, help="Source repository.")
     create.add_argument("--task-slug", help="Override generated task slug.")
@@ -1498,7 +1498,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # status
     status = subparsers.add_parser("status", help="Show task worktrees status.")
-    status.add_argument("--project-root", help="Host project root containing .codex/project.")
+    status.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     status.add_argument("--task-slug", "--task", dest="task_slug", help="Show one task slug.")
     status.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
@@ -1506,11 +1506,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-state",
         nargs="?",
         const="",
-        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
     )
 
     reconcile = subparsers.add_parser("reconcile", help="Reconcile coord/session metadata against Git live worktree state.")
-    reconcile.add_argument("--project-root", help="Host project root containing .codex/project.")
+    reconcile.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     reconcile.add_argument("--repo", action="append", choices=["self", "ai-client-governance"], help="Repository to reconcile. Default: both.")
     reconcile.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     reconcile.add_argument("--strict", action="store_true", help="Fail on warnings as well as errors.")
@@ -1524,12 +1524,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-state",
         nargs="?",
         const="",
-        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
     )
 
     # close
     close = subparsers.add_parser("close", help="Check worktree closeout status.")
-    close.add_argument("--project-root", help="Host project root containing .codex/project.")
+    close.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     close.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
     close.add_argument("--repo", choices=["self", "ai-client-governance"], default="self", help="Source repository.")
     close.add_argument("--target-ref", default="main", help="Target ref for merge check.")
@@ -1538,7 +1538,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # queue
     queue = subparsers.add_parser("queue", help="Add a task worktree branch to the integration queue.")
-    queue.add_argument("--project-root", help="Host project root containing .codex/project.")
+    queue.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     queue.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
     queue.add_argument("--repo", choices=["self", "ai-client-governance"], default="self", help="Source repository.")
     queue.add_argument("--target-ref", default="main", help="Target ref used to compute changed files.")
@@ -1550,7 +1550,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # merge
     merge = subparsers.add_parser("merge", help="Merge a clean task worktree branch into its target branch.")
-    merge.add_argument("--project-root", help="Host project root containing .codex/project.")
+    merge.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     merge.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
     merge.add_argument("--repo", choices=["self", "ai-client-governance"], default="self", help="Source repository.")
     merge.add_argument("--target-ref", default="main", help="Target branch currently checked out in the source repo.")
@@ -1561,7 +1561,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # finalize
     finalize = subparsers.add_parser("finalize", help="Run a live worktree status gate before final output.")
-    finalize.add_argument("--project-root", help="Host project root containing .codex/project.")
+    finalize.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     finalize.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     finalize.add_argument("--require-merged", action="store_true", help="Fail when any task worktree is not merged to target.")
     finalize.add_argument("--require-no-task-worktrees", action="store_true", help="Fail when any task worktree still exists.")
@@ -1575,14 +1575,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--write-state",
         nargs="?",
         const="",
-        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
     )
 
     host_closeout = subparsers.add_parser(
         "host-closeout",
         help="Verify host submodule gitlink, worktree state, and task tracking after embedded ai-client-governance merges.",
     )
-    host_closeout.add_argument("--project-root", help="Host project root containing .codex/project.")
+    host_closeout.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     host_closeout.add_argument("--repo", choices=["ai-client-governance"], default="ai-client-governance", help="Embedded repository to verify.")
     host_closeout.add_argument("--task-slug", "--task", dest="task_slug", help="Task slug used to find related task tracking.")
     host_closeout.add_argument("--task-tracking", action="append", help="Related task tracking file. Repeatable.")
@@ -1592,7 +1592,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # cleanup-branch
     cleanup_branch = subparsers.add_parser("cleanup-branch", help="Delete a merged task branch after its worktree is removed.")
-    cleanup_branch.add_argument("--project-root", help="Host project root containing .codex/project.")
+    cleanup_branch.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     cleanup_branch.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug used as codex/<task-slug>.")
     cleanup_branch.add_argument("--repo", choices=["self", "ai-client-governance"], default="self", help="Source repository.")
     cleanup_branch.add_argument("--target-ref", default="main", help="Target ref that must contain the branch.")
@@ -1601,7 +1601,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # remove
     remove = subparsers.add_parser("remove", help="Remove a task worktree.")
-    remove.add_argument("--project-root", help="Host project root containing .codex/project.")
+    remove.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     remove.add_argument("--task-slug", "--task", dest="task_slug", required=True, help="Task slug (worktree directory name).")
     remove.add_argument("--repo", choices=["self", "ai-client-governance"], default="self", help="Source repository.")
     remove.add_argument("--force", action="store_true", help="Remove even if dirty.")

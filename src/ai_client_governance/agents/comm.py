@@ -801,7 +801,7 @@ def add_common_message_args(parser: argparse.ArgumentParser) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manage .codex/project/agents/comm local sub-agent communication files."
+        description="Manage .ai-client/project/agents/comm local sub-agent communication files."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

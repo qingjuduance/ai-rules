@@ -1,7 +1,7 @@
 # AI 执行流程通用框架
 
-本文件是 `ai-client-governance` 的通用客户端治理插件事实源，同时也是兼容 `AGENTS.md` 生态的
-入口 adapter。治理规则不能绑定某一个模型、客户端或文件名；`AGENTS.md`、
+本文件是 `ai-client-governance` 的通用客户端治理插件事实源，同时也是 `AGENTS.md` 生态的
+入口适配文件。治理规则不能绑定某一个模型、客户端或文件名；`AGENTS.md`、
 `CLAUDE.md`、`GEMINI.md`、Copilot instructions、Cursor/Cline/Windsurf/Continue
 rules 等都只是把同一套执行流程暴露给不同 AI 工具的入口适配层。
 
@@ -17,19 +17,23 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **客户端治理层，不是 agent runtime**：本仓库只治理宿主 AI 编程客户端已有能力
   怎么被使用、记录和验收，不重造 Codex、Claude Code、Cursor、Cline、Windsurf、
   Continue 等客户端，也不把某个模型或工具私有行为写成通用前提。
-- **完整嵌入是事实模型**：通用规则、脚本、skills、README 和 manifest 必须作为
-  一个独立 Git 仓库嵌入 `.codex/ai-client-governance/`；不再回到 common 规则、
-  scripts 或 skills 分散复制模型。
+- **`.ai-client` 是唯一治理布局**：通用规则、脚本、skills、README 和 manifest
+  必须作为一个独立 Git 仓库嵌入 `.ai-client/ai-client-governance/`；项目特化层
+  只能放在 `.ai-client/project/`。旧 `.codex` 治理布局不保留、不兼容、不作为
+  fallback；活体入口、脚本默认值、状态文件和新增记录都不能写回旧目录。
 - **入口是 adapter，契约才是事实源**：`AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、
   Copilot/Cursor/Cline/Windsurf/Continue/Roo/Aider 等入口只负责带路，不能各自
   演化出一套规则。真正事实源是通用治理契约、项目规则和 manifest。
 - **可确定约束优先组件化**：可重复、易遗漏、可检查或跨会话影响仓库状态的要求，
   优先沉淀为 CLI、runtime component、gate、状态文件或 skill 能力；散文规则只保留
   不可绕过的边界和设计意图。
+- **结构化事实优先于 Markdown 反解析**：新任务先写 SQLite 事实源
+  `.ai-client/project/state/aicg.db`，再按需导出 Markdown 报告；不能把机器门禁依赖
+  建在散文和 Markdown 表格的事后反解析上。
 - **修改必有隔离与证据**：修改型任务默认通过 worktree、task tracking、写锁、
   工具账本、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
 - **项目特化不污染通用层**：目标项目的业务、简历、学习路线、源码快照、目录结构、
-  本地交付规则和私有偏好留在 `.codex/project/` 或项目原生资产中；通用仓库只收纳
+  本地交付规则和私有偏好留在 `.ai-client/project/` 或项目原生资产中；通用仓库只收纳
   跨项目可复用的治理流程和工具。
 - **保留项目原生资产**：目标项目已有原生规则入口、skills、IDE 配置或团队约定时，
   默认保留、索引并报告冲突；除非用户明确批准，不静默覆盖。
@@ -48,24 +52,27 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、
   `.clinerules/`、`.windsurf/rules/*.md`、`.continue/rules/`、`.roo/rules/`
   和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
-- `ai-client-governance` 的通用规则事实源仍是嵌入式 `.codex/ai-client-governance/AGENTS.md`；
-  这里的 `AGENTS.md` 是兼容文件名，不代表框架只服务 Codex 或 AGENTS 生态。
-- 项目特有规则默认入口是 `.codex/project/rules/project/AGENTS.md`；如果项目
+- `ai-client-governance` 的通用规则事实源是嵌入式
+  `.ai-client/ai-client-governance/AGENTS.md`；旧 `.codex/ai-client-governance/`
+  不是迁移期路径，也不是 fallback。这里的 `AGENTS.md` 是入口适配文件名，
+  不代表框架只服务 Codex 或 AGENTS 生态。
+- 项目特有规则默认入口是 `.ai-client/project/rules/project/AGENTS.md`；如果项目
   未来改用其它内部事实源，必须在根入口 adapter、manifest 和安装配置中同步记录。
 - 各工具入口 adapter 应保持薄层：只声明读取顺序、编码、同步检查和边界，不复制
   大段通用规则；能导入时优先导入，不能导入时用明确路径指向同一事实源。
 - `.codex/rules/common/`、根 `scripts/`、顶层 `.codex/skills/` 的旧复制模型
-  不再作为通用规则 fallback。
+  已删除；发现当前入口、脚本或 README 仍引用它们时，直接改成 `.ai-client`
+  布局，不新增兼容层。
 - 资产优先级固定为：
   1. 目标项目原生资产。
-  2. `.codex/project/` 项目特化层。
-  3. `.codex/ai-client-governance/` 通用层。
+  2. `.ai-client/project/` 项目特化层。
+  3. `.ai-client/ai-client-governance/` 通用层。
 - 通用规则不得保存项目业务、学习路线、简历规则、源码快照、本地交付细节或
   某个 AI 工具私有的交互偏好。
 - 项目规则不能放宽通用安全边界、审批流程、Git 边界和恢复现场要求。
 - Windows/PowerShell 读取中文规则文件时，设置本次进程 UTF-8 编码，并使用
   `Get-Content -Raw -Encoding UTF8`；长文件优先用
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py context-extract` 摘录。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py context-extract` 摘录。
 
 ## 核心原则：流程化与可审计
 
@@ -74,8 +81,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 每个修改型任务必须留下可复盘证据：任务输入拆解、审批、worktree、写锁、
   操作账本、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
 - worktree 创建、状态同步、收口检查和安全清理优先使用
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task ...`；当前 worktree
-  总览写入 `.codex/project/state/worktrees.json`，并在 task tracking 中引用。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task ...`；当前 worktree
+  总览写入 `.ai-client/project/state/worktrees.json`，并在 task tracking 中引用。
   该文件是可提交的审计快照，活体状态以重新运行 `worktree-task status --write-state`
   为准；其中 HEAD 字段必须使用 `*_at_snapshot` 语义，避免提交快照本身推进 HEAD
   后造成误判。
@@ -95,10 +102,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 ## 会话同步
 
-- 新会话必须运行 `.codex/ai-client-governance/check-ai-client-governance-sync.ps1` 或等价 wrapper。
+- 新会话必须运行 `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` 或等价 wrapper。
 - 跨系统事实逻辑优先来自
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py sync-check`。
-- 每次会话都检查 `.codex/ai-client-governance/` 是否存在、是否为 Git 仓库、是否 dirty、
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py sync-check`。
+- 每次会话都检查 `.ai-client/ai-client-governance/` 是否存在、是否为 Git 仓库、是否 dirty、
   是否 ahead/behind/diverged。
 - 24 小时规则只限制 `git fetch` 频率；本地不一致必须每次提示到同步完成。
 - 同步检查不得自动 `pull` 或 `push`。
@@ -111,8 +118,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 用户回复 `批准：全部` 只批准当前请求批准消息列出的计划。
 - 用户消息先进入任务队列 `candidate` 或 `awaiting_approval`，不能直接成为 `active`。
 - 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
-- 队列事实源是 `.codex/project/state/task-queue.json`，入口是：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py task-queue ...`。
+- 队列事实源是 `.ai-client/project/state/task-queue.json`，入口是：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue ...`。
 - 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
 
 ## 强制 Worktree
@@ -121,10 +128,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或提交前，必须先创建任务级 `git worktree` 和独立分支。
 - 只读定位、读取规则、同步检查、状态检查、计划输出不要求 worktree；一旦要落盘，
   先进入 worktree。
-- 任务 worktree 默认放在宿主项目 `.codex/project/.worktree/<task-slug>/`。
-- 修改嵌入式 `.codex/ai-client-governance/` 时，仍优先用
+- 任务 worktree 默认放在宿主项目 `.ai-client/project/.worktree/<task-slug>/`。
+- 修改嵌入式 `.ai-client/ai-client-governance/` 时，仍优先用
   `worktree-task create --repo ai-client-governance` 创建任务 worktree，目标路径放到宿主项目
-  `.codex/project/.worktree/<task-slug>/`。只有固定脚本不可用时，才从
+  `.ai-client/project/.worktree/<task-slug>/`。只有固定脚本不可用时，才从
   ai-client-governance 仓库手工执行 `git worktree add` 并记录 break-glass 原因。
 - task tracking 必须记录源仓库、worktree 路径、分支、基准提交和 `git status`。
 - coord session、lock 或队列记录不能代替 Git live state；开始修改、恢复任务和最终收口时，
@@ -137,9 +144,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - worktree 合并收口任务的最终 live gate 必须使用
   `worktree-task finalize --require-merged --require-no-task-worktrees` 或等价检查，
   确认没有残留任务 worktree；如因明确保留策略跳过该强门禁，必须记录原因和恢复方式。
-- 合并嵌入式 `ai-client-governance` 任务 worktree 后，不能只收口 `.codex/ai-client-governance/`
+- 合并嵌入式 `ai-client-governance` 任务 worktree 后，不能只收口 `.ai-client/ai-client-governance/`
   子仓库。宿主仓库也必须作为同一条 closeout 链路处理：刷新
-  `.codex/project/state/worktrees.json`，检查并提交 `.codex/ai-client-governance` submodule
+  `.ai-client/project/state/worktrees.json`，检查并提交 `.ai-client/ai-client-governance` submodule
   gitlink，更新对应 task tracking，并用
   `worktree-task host-closeout --repo ai-client-governance --require-task-tracking` 或
   `worktree-task finalize --require-host-closeout` 核对。最终完成态还要加
@@ -147,7 +154,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 如果工具限制、路径冲突、分支冲突、权限或 Git 状态异常导致无法创建 worktree，
   必须停止修改并向用户确认处理方式，不能退回主工作区直接改。
 - 跨 worktree 的 session、锁和 integration queue 使用
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-coord ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-coord ...`。
 
 ## ai-client-governance 客户端治理插件与生命周期组件
 
@@ -167,9 +174,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 输出拦截器负责最终回复覆盖、worktree 完成状态、未合并/未提交/未 push 边界和下一步提示。
 - 横切门禁负责编码、文档引用、Git 边界、脚本账本、trace flow 和 correction 扫描。
 - 非纯只读小问答，优先运行生命周期 preflight：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight ...`。
 - 收口前优先运行 lifecycle finalize，并根据任务类型触发已注册门禁：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py lifecycle finalize ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle finalize ...`。
 - 生命周期把输入来源区分为 `user`、`web`、`file`、`tool`、`agent`、`history`。
 - 联网输入必须记录 URL 或资料路径；不能把外部资料和用户指令混作同一事实。
 - 脚本判断与人工判断不一致时，在 task tracking 记录采用、修正或阻塞原因。
@@ -186,20 +193,29 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - `gate-pool` 以 `gate_step` 聚合同类门禁；多个组件指向同一 `gate_step` 时，
   应聚合 changed paths 后运行一次，并在 dry-run、trace 或 task tracking 中可见。
 
-## Task Tracking 与恢复现场
+## 结构化任务记录、Task Tracking 与恢复现场
 
 - 中/大任务、修改型任务、规则/脚本/skill、文档、Git、简历、long-running、
   multi-agent 或 correction 任务必须有 task tracking。
-- task tracking 放在 `.codex/project/records/task-tracking/`。
-- pending 恢复入口放在 `.codex/project/records/pending-tasks/`。
-- correction 记录放在 `.codex/project/records/corrections/`。
-- 运行态、日志和账本放在 `.codex/project/state/`、`.codex/project/logs/`
-  和 `.codex/project/tmp/`，不写回通用仓库。
+- 新任务的机器事实优先写入 `.ai-client/project/state/aicg.db`。入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record ...`。
+- 执行前必须先用 `contract describe` 明确本任务必填字段、枚举、gate 和
+  写入命令；不要靠最终 `task-gate` 从 Markdown 里反推缺什么。
+- `task-record apply --json <file>` 是结构化写入入口；它必须在落库前校验
+  `tasks`、`requirements`、`triggers`、`outputs`、`worktrees`、`validations`
+  的必填字段、枚举和外键。校验失败不得生成半成品记录。
+- `task-gate --task-id <task-id>` 和 `session-gate --task-id <task-id>` 优先读取
+  SQLite 事实源；Markdown task tracking 只作为历史审计、恢复说明和可读报告。
+- task tracking Markdown 导出或历史记录放在 `.ai-client/project/records/task-tracking/`。
+- pending 恢复入口放在 `.ai-client/project/records/pending-tasks/`。
+- correction 记录放在 `.ai-client/project/records/corrections/`。
+- 运行态、日志和账本放在 `.ai-client/project/state/`、`.ai-client/project/logs/`
+  和 `.ai-client/project/tmp/`，不写回通用仓库。
 - task tracking 至少记录：用户输入拆解、用户要求、触发日志、任务类型、worktree 证据、
   Worktree 完成记录、影响面、操作账本、验证记录、DoD、Git 状态和恢复现场。
 - 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
 - 模板由程序输出：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py templates task-tracking`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates task-tracking`。
 
 ## 任务类型门禁
 
@@ -209,9 +225,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 任务类型不是标签装饰；选中后必须在 task tracking 写证据。
 - `rules-script` 默认要求联网核对外部成熟做法；不能只口头声称参考过。
 - 任务门禁入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py task-gate ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate ...`。
 - session 收口门禁入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py session-gate ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py session-gate ...`。
 - 门禁脚本只读检查，不得自动修改规则入口 adapter、README、pending、
   corrections 或 Git。
 - 门禁失败时，先修证据、修脚本能力或记录阻塞，不得带失败门禁发送完成态回复。
@@ -241,18 +257,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 - `ai-client-governance` 的 Python 代码采用包结构：`src/ai_client_governance/` 是唯一实现层。
 - `scripts/` 只保留一个公开入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py <command> ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py <command> ...`。
 - 新增能力不得再创建 `scripts/codex_*.py`、`scripts/validate_*.py`、
   `scripts/agent_*.py` 这类平铺旧入口；发现旧入口属于当前改动范围时直接移除或迁移。
 - 通用脚本默认使用 Python 标准库实现；PowerShell/Bash 只作为 wrapper 或平台入口。
 - 新增或修改脚本后，必须验证 `--help`、一个真实成功路径、必要的失败/警告路径，
-  并运行 `python .codex/ai-client-governance/scripts/ai_client_governance.py selftest` 覆盖黑盒强制行为。
+  并运行 `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest` 覆盖黑盒强制行为。
 - 脚本能力不支持当前目标时，先记录 `## 脚本能力适配门禁`；不得手工改运行态、
   锁、账本或派生报告来伪造脚本能力。
-- Python 运行产生的缓存必须重定向到 `.codex/project/cache/python-pycache`。
+- Python 运行产生的缓存必须重定向到 `.ai-client/project/cache/python-pycache`。
 - 文本文件必须用 UTF-8；JSON 不应带 UTF-8 BOM。
 - 编码验证入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py validate-encoding ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py validate-encoding ...`。
 
 ## 文档、引用与交付
 
@@ -264,9 +280,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 文档影响面和引用反查默认由 `gate-pool` 聚合触发一次
   `ai_client_governance.py doc-index check --changed-path ...`；不要对同一 changed-path 集合重复跑同一节点。
 - 文档引用图入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py doc-index ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py doc-index ...`。
 - 文档任务验证入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py validate-doc ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py validate-doc ...`。
 - 仓库内部 Markdown 链接使用相对路径，不写本机绝对路径。
 - 外部运行目标、日志、构建输出和临时验证根等复现证据必须记录真实路径。
 
@@ -285,11 +301,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
 - 创建子 AI 前必须准备 Agent Brief 或等价短输入包。
 - Agent Brief 模板由程序输出：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py templates agent-brief`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates agent-brief`。
 - 文件型通信总线入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py agent-comm ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py agent-comm ...`。
 - 状态看板入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py agent-groups ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py agent-groups ...`。
 - 多 agent 写入前必须登记 write scope 并获取锁。
 - 子 AI 用于测试门禁时，不能只抽查单点；必须记录 `## 子 AI 验收矩阵` 的结构化
   表格行，覆盖本轮全部触发子 AI 的 REQ、输入门禁、输出门禁、任务类型门禁、
@@ -304,25 +320,25 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - correction 独立文件是事实源；`index.md` 是派生汇总。
 - 新增或更新 correction 后必须同步独立文件、索引、当前 tracking 和返回动作。
 - correction 模板由程序输出：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py templates correction`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates correction`。
 - 扫描入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py scan-corrections ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py scan-corrections ...`。
 - 不把一次性用户原话直接堆进规则入口 adapter；先沉淀 correction，再判断是否
   升级规则、脚本、skill、manifest 或 README。
 
 ## Skills
 
-- 通用 skill 事实源在 `.codex/ai-client-governance/.codex/skills/`。
-- 项目特化 skill 放 `.codex/project/skills/`。
+- 通用 skill 事实源在 `.ai-client/ai-client-governance/skills/`。
+- 项目特化 skill 放 `.ai-client/project/skills/`。
 - 目标项目原生 skill 优先级最高；同名冲突必须记录，不能静默覆盖。
 - 修改任意 skill 后必须运行对应 skill 校验；带脚本的 skill 还要跑最小真实用例。
 
 ## 收口
 
 - 收口前按任务类型运行 gate pool 或等价门禁：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool ...`。
 - 声称任务完成前必须运行或记录 completion test 节点：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py completion-test ...`。该节点根据
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test ...`。该节点根据
   changed paths、任务类型和验收标准生成测试计划；规则/脚本变更至少覆盖
   runtime components、gate-pool dry-run 和 selftest，worktree/coord 变更还要覆盖
   `worktree-task reconcile --strict`。
@@ -331,10 +347,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 规则/脚本/文档链路变更后，最终记录必须覆盖治理节点是否可见、门禁是否执行、
   是否发生去重、是否有跳过理由和是否存在明显性能问题。
 - 规则/脚本强制执行能力变更后，收口前必须运行：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
 - 工具调用账本入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py tool-invocations ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-invocations ...`。
 - 调用链路报告入口：
-  `python .codex/ai-client-governance/scripts/ai_client_governance.py tool-flow ...`。
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-flow ...`。
 - 最终回复必须说明：本轮任务完成状态、原主任务状态、active pending、验证结果、
   Git/worktree 状态、worktree 是否完成、是否合并/提交/push、未处理项和下一步。

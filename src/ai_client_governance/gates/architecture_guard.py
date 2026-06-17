@@ -8,12 +8,16 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ai_client_governance.common.paths import PROJECT_DIR, PROJECT_RULES_ENTRY, PROJECT_SKILLS_DIR
+from ai_client_governance.common.paths import AI_CLIENT_ROOT, PROJECT_DIR, PROJECT_RULES_ENTRY, PROJECT_SKILLS_DIR
 
 
-ALLOWED_CODEX_TOP = {"ai-client-governance", "ai-client-governance-config.json", "project"}
-LEGACY_CODEX_TOP = {
+REQUIRED_AI_CLIENT_TOP = {"ai-client-governance", "ai-client-governance-config.json", "project"}
+FORBIDDEN_CODEX_TOP = {
+    "ai-client-governance",
+    "ai-client-governance-config.json",
+    "project",
     "rules",
+    "skills",
     "cache",
     "tmp",
     "task-tracking",
@@ -26,8 +30,8 @@ LEGACY_CODEX_TOP = {
     "tool-invocations",
     "ai-client-governance-state.json",
 }
-NATIVE_PROJECT_SKILLS_DIR = Path(".codex") / "skills"
-AI_CLIENT_GOVERNANCE_SKILLS_DIR = Path(".codex") / "ai-client-governance" / ".codex" / "skills"
+NATIVE_PROJECT_SKILLS_DIR = Path("skills")
+AI_CLIENT_GOVERNANCE_SKILLS_DIR = AI_CLIENT_ROOT / "ai-client-governance" / "skills"
 
 REQUIRED_PROJECT_PATHS = [
     PROJECT_DIR / "records",
@@ -39,8 +43,8 @@ REQUIRED_PROJECT_PATHS = [
 ]
 PROJECT_ROOT_AGENTS = Path("AGENTS.md")
 ADAPTER_REQUIRED_MARKERS = (
-    ".codex/ai-client-governance/AGENTS.md",
-    ".codex/project/rules/project/AGENTS.md",
+    ".ai-client/ai-client-governance/AGENTS.md",
+    ".ai-client/project/rules/project/AGENTS.md",
 )
 NATIVE_RULE_ADAPTERS = [
     Path("AGENTS.md"),
@@ -84,34 +88,38 @@ def build_report(root: Path) -> dict[str, object]:
     errors: list[Finding] = []
     warnings: list[Finding] = []
     notes: list[str] = []
-    codex = root / ".codex"
-    if not codex.exists():
-        errors.append(Finding("error", ".codex directory is missing", ".codex"))
-        top_entries: list[str] = []
+    ai_client = root / AI_CLIENT_ROOT
+    if not ai_client.exists():
+        errors.append(Finding("error", ".ai-client directory is missing", AI_CLIENT_ROOT.as_posix()))
+        ai_client_top_entries: list[str] = []
     else:
-        top_entries = sorted(item.name for item in codex.iterdir())
-        unexpected = [name for name in top_entries if name not in ALLOWED_CODEX_TOP]
-        for name in unexpected:
-            if name == "skills":
-                warnings.append(
+        ai_client_top_entries = sorted(item.name for item in ai_client.iterdir())
+        for name in sorted(REQUIRED_AI_CLIENT_TOP):
+            if not (ai_client / name).exists():
+                errors.append(
                     Finding(
-                        "warning",
-                        ".codex/skills exists; treat it as a native project asset candidate and do not modify it without explicit user approval",
-                        ".codex/skills",
+                        "error",
+                        f"required .ai-client top-level entry is missing: {name}",
+                        f".ai-client/{name}",
                     )
                 )
-                continue
-            level = "error" if name in LEGACY_CODEX_TOP else "warning"
-            finding = Finding(level, f"unexpected .codex top-level entry: {name}", f".codex/{name}")
+
+    codex = root / ".codex"
+    codex_top_entries = sorted(item.name for item in codex.iterdir()) if codex.exists() else []
+    if codex.exists():
+        for name in codex_top_entries:
+            level = "error" if name in FORBIDDEN_CODEX_TOP else "warning"
+            finding = Finding(
+                level,
+                f"old .codex governance layout must be removed, found top-level entry: {name}",
+                f".codex/{name}",
+            )
             (errors if level == "error" else warnings).append(finding)
-        for name in sorted(ALLOWED_CODEX_TOP):
-            if not (codex / name).exists():
-                errors.append(Finding("error", f"required .codex top-level entry is missing: {name}", f".codex/{name}"))
 
     if (root / "scripts").exists():
         errors.append(Finding("error", "root scripts directory must not exist", "scripts"))
     if (root / ".codex" / "cache").exists():
-        errors.append(Finding("error", "top-level .codex/cache must not exist; use .codex/project/cache", ".codex/cache"))
+        errors.append(Finding("error", "top-level .codex/cache must not exist; use .ai-client/project/cache", ".codex/cache"))
 
     for path in REQUIRED_PROJECT_PATHS:
         if not (root / path).exists():
@@ -183,7 +191,7 @@ def build_report(root: Path) -> dict[str, object]:
         warnings.append(
             Finding(
                 "warning",
-                "native project skill shadows .codex/project specialization; native asset has highest priority and requires explicit approval to modify",
+                "native project skill shadows .ai-client/project specialization; native asset has highest priority and requires explicit approval to modify",
                 f"{NATIVE_PROJECT_SKILLS_DIR.as_posix()}/{name}",
             )
         )
@@ -199,7 +207,7 @@ def build_report(root: Path) -> dict[str, object]:
         warnings.append(
             Finding(
                 "warning",
-                ".codex/project skill shadows ai-client-governance skill; project specialization wins after native assets and conflict must be reviewed",
+                ".ai-client/project skill shadows ai-client-governance skill; project specialization wins after native assets and conflict must be reviewed",
                 f"{PROJECT_SKILLS_DIR.as_posix()}/{name}",
             )
         )
@@ -221,8 +229,10 @@ def build_report(root: Path) -> dict[str, object]:
 
     return {
         "root": root.as_posix(),
-        "allowed_codex_top": sorted(ALLOWED_CODEX_TOP),
-        "codex_top": top_entries,
+        "required_ai_client_top": sorted(REQUIRED_AI_CLIENT_TOP),
+        "ai_client_top": ai_client_top_entries,
+        "forbidden_codex_top": sorted(FORBIDDEN_CODEX_TOP),
+        "codex_top": codex_top_entries,
         "errors": [asdict(item) for item in errors],
         "warnings": [asdict(item) for item in warnings],
         "notes": notes,
@@ -249,8 +259,9 @@ def render_text(report: dict[str, object]) -> str:
         f"Root: {report['root']}",
         "Priority: " + " > ".join(report["priority_order"]),
         "Native rule adapters: " + ", ".join(report["existing_native_rule_adapters"]),
-        "Allowed .codex top: " + ", ".join(report["allowed_codex_top"]),
-        "Actual .codex top: " + ", ".join(report["codex_top"]),
+        "Required .ai-client top: " + ", ".join(report["required_ai_client_top"]),
+        "Actual .ai-client top: " + ", ".join(report["ai_client_top"]),
+        "Forbidden .codex top present: " + (", ".join(report["codex_top"]) or "none"),
         f"Errors: {len(errors)}",
     ]
     for item in errors:
@@ -278,4 +289,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

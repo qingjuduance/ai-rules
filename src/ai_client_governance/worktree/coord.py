@@ -224,7 +224,7 @@ def is_stale_record(item: dict[str, Any], at_time: datetime | None = None) -> bo
 
 class StateStore:
     def __init__(self, common_dir: Path) -> None:
-        self.runtime_dir = common_dir / "codex-runtime" / "worktree-coord"
+        self.runtime_dir = common_dir / "ai-client-runtime" / "worktree-coord"
         self.state_file = self.runtime_dir / "state.json"
         self.events_file = self.runtime_dir / "events.jsonl"
         self.lock_file = self.runtime_dir / "state.lock"

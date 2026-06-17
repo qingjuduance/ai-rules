@@ -230,7 +230,7 @@ def score_section(file_display: str, heading: str, body: str) -> tuple[str, dict
     text = f"{file_display}\n{heading}\n{body}"
     scores = {label: count_keywords(text, words) for label, words in KEYWORDS.items()}
     normalized_file = file_display.replace("\\", "/")
-    project_path = ".codex/project/rules/project/" in normalized_file
+    project_path = ".ai-client/project/rules/project/" in normalized_file
     if project_path:
         scores["project-rule"] += 3
     if "README.md" in file_display and heading.lower() in {"usage", "使用方式", "托管范围"}:

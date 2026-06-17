@@ -3,9 +3,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$TargetProjectPath,
     [string]$RulesRepoPath = $PSScriptRoot,
-    [string]$EmbedPath = ".codex\ai-client-governance",
+    [string]$EmbedPath = ".ai-client\ai-client-governance",
     [string]$RemoteUrl,
-    [ValidateSet("clone", "submodule")]
+    [ValidateSet("clone", "submodule", "existing")]
     [string]$Mode = "submodule",
     [string]$Branch,
     [switch]$PlanOnly,
@@ -13,7 +13,7 @@ param(
     [switch]$NoBackup,
     [switch]$SkipRootEntry,
     [switch]$ForceRootEntry,
-    [switch]$SkipAgentAdapters,
+    [switch]$InstallAgentAdapters,
     [switch]$ForceAgentAdapters,
     [switch]$SkipProjectPlaceholder,
     [switch]$SkipSyncCheck
@@ -203,6 +203,41 @@ function Test-GitRepoRoot {
     return $expected -eq $actual
 }
 
+function Resolve-LocalSourcePath {
+    param([string]$Source)
+
+    if ([string]::IsNullOrWhiteSpace($Source)) {
+        return $null
+    }
+    if ($Source -match "^[A-Za-z][A-Za-z0-9+.-]*://" -or
+        $Source -match "^[^/\\@]+@[^/\\:]+:.+") {
+        return $null
+    }
+    $candidate = if ([System.IO.Path]::IsPathRooted($Source)) {
+        $Source
+    }
+    else {
+        Join-Path $TargetProjectPath $Source
+    }
+    if (Test-Path -LiteralPath $candidate) {
+        return (Resolve-Path -LiteralPath $candidate).Path
+    }
+    return $null
+}
+
+function Warn-If-LocalSourceDirty {
+    param([string]$Source)
+
+    $sourcePath = Resolve-LocalSourcePath -Source $Source
+    if (-not $sourcePath -or -not (Test-GitWorkTree -Path $sourcePath)) {
+        return
+    }
+    $status = Invoke-GitText -WorkingDirectory $sourcePath -GitArgs @("-c", "core.quotepath=false", "status", "--porcelain")
+    if ($status.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($status.Text)) {
+        Write-Warning "Rules source has uncommitted changes. Git clone/submodule installs only committed objects; commit the source first, or put the prepared repo at the embed path and use -Mode existing."
+    }
+}
+
 function Get-DefaultRulesSource {
     if (-not [string]::IsNullOrWhiteSpace($RemoteUrl)) {
         return $RemoteUrl
@@ -267,11 +302,11 @@ function Get-RootAgentsContent {
         'This file is a thin adapter for AI tools that understand `AGENTS.md`.',
         'Before working in this project, read:',
         '',
-        '1. `.codex/ai-client-governance/AGENTS.md`',
-        '2. `.codex/project/rules/project/AGENTS.md`',
+        '1. `.ai-client/ai-client-governance/AGENTS.md`',
+        '2. `.ai-client/project/rules/project/AGENTS.md`',
         '',
-        'If `.codex/ai-client-governance/` is missing, read `.codex/ai-client-governance-config.json`,',
-        'locate the configured ai-client-governance repository, embed it at `.codex/ai-client-governance/`,',
+        'If `.ai-client/ai-client-governance/` is missing, read `.ai-client/ai-client-governance-config.json`,',
+        'locate the configured ai-client-governance repository, embed it at `.ai-client/ai-client-governance/`,',
         'then restart the read order.',
         '',
         '## Encoding',
@@ -284,15 +319,15 @@ function Get-RootAgentsContent {
         '',
         '## Boundaries',
         '',
-        '- `.codex/ai-client-governance/` is the embedded common rules Git repository.',
+        '- `.ai-client/ai-client-governance/` is the embedded common rules Git repository.',
         '- Git projects should register it as a submodule so the parent project',
         '  records the exact ai-client-governance commit.',
-        '- Priority order: native project assets > `.codex/project/` specializations > `.codex/ai-client-governance/` common rules.',
-        '- `.codex/project/rules/project/` belongs to this project only.',
+        '- Priority order: native project assets > `.ai-client/project/` specializations > `.ai-client/ai-client-governance/` common rules.',
+        '- `.ai-client/project/rules/project/` belongs to this project only.',
         '- Existing project-owned rule adapters, native project skills, and original local rules stay authoritative;',
         '  ai-client-governance may add missing integration notes but must not silently overwrite them.',
         '- Do not write project-specific rules back to the common ai-client-governance repo.',
-        '- Before each new session, run `.codex/ai-client-governance/check-ai-client-governance-sync.ps1`',
+        '- Before each new session, run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1`',
         '  or an equivalent wrapper and warn until the embedded repo is synchronized.'
     )
     return ($lines -join [Environment]::NewLine)
@@ -308,14 +343,14 @@ function Get-AdapterBaseLines {
         'the full common rules. Before working in this project, read:',
         '',
         '1. `AGENTS.md` if it exists in the project root.',
-        '2. `.codex/ai-client-governance/AGENTS.md`.',
-        '3. `.codex/project/rules/project/AGENTS.md`.',
+        '2. `.ai-client/ai-client-governance/AGENTS.md`.',
+        '3. `.ai-client/project/rules/project/AGENTS.md`.',
         '',
-        'If `.codex/ai-client-governance/` is missing, read `.codex/ai-client-governance-config.json`,',
-        'locate the configured ai-client-governance repository, embed it at `.codex/ai-client-governance/`,',
+        'If `.ai-client/ai-client-governance/` is missing, read `.ai-client/ai-client-governance-config.json`,',
+        'locate the configured ai-client-governance repository, embed it at `.ai-client/ai-client-governance/`,',
         'then restart the read order.',
         '',
-        'Run `.codex/ai-client-governance/check-ai-client-governance-sync.ps1` or an equivalent wrapper at',
+        'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` or an equivalent wrapper at',
         'the start of a new session. Warn until the embedded ai-client-governance repository is',
         'synchronized. Do not pull or push automatically.',
         '',
@@ -337,12 +372,12 @@ function Get-ClaudeAdapterContent {
         'pointed at the shared facts instead of copying long rules here.',
         '',
         '@AGENTS.md',
-        '@.codex/ai-client-governance/AGENTS.md',
-        '@.codex/project/rules/project/AGENTS.md',
+        '@.ai-client/ai-client-governance/AGENTS.md',
+        '@.ai-client/project/rules/project/AGENTS.md',
         '',
-        'If an import is missing, read `.codex/ai-client-governance-config.json`, embed the',
-        '`ai-client-governance` repository at `.codex/ai-client-governance/`, then restart the read order.',
-        'Run `.codex/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
+        'If an import is missing, read `.ai-client/ai-client-governance-config.json`, embed the',
+        '`ai-client-governance` repository at `.ai-client/ai-client-governance/`, then restart the read order.',
+        'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
     )
     return ($lines -join [Environment]::NewLine)
 }
@@ -355,12 +390,12 @@ function Get-GeminiAdapterContent {
         'pointed at the shared facts instead of copying long rules here.',
         '',
         '@AGENTS.md',
-        '@.codex/ai-client-governance/AGENTS.md',
-        '@.codex/project/rules/project/AGENTS.md',
+        '@.ai-client/ai-client-governance/AGENTS.md',
+        '@.ai-client/project/rules/project/AGENTS.md',
         '',
-        'If an import is missing, read `.codex/ai-client-governance-config.json`, embed the',
-        '`ai-client-governance` repository at `.codex/ai-client-governance/`, then restart the read order.',
-        'Run `.codex/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
+        'If an import is missing, read `.ai-client/ai-client-governance-config.json`, embed the',
+        '`ai-client-governance` repository at `.ai-client/ai-client-governance/`, then restart the read order.',
+        'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
     )
     return ($lines -join [Environment]::NewLine)
 }
@@ -373,9 +408,9 @@ function Get-CursorAdapterContent {
         '',
         '# Cursor AI Client Governance Adapter',
         '',
-        'This project uses `.codex/ai-client-governance/` as the shared AI execution framework.',
-        'Before changing files, read `AGENTS.md`, `.codex/ai-client-governance/AGENTS.md`, and',
-        '`.codex/project/rules/project/AGENTS.md`. Keep this Cursor rule as a thin',
+        'This project uses `.ai-client/ai-client-governance/` as the shared AI execution framework.',
+        'Before changing files, read `AGENTS.md`, `.ai-client/ai-client-governance/AGENTS.md`, and',
+        '`.ai-client/project/rules/project/AGENTS.md`. Keep this Cursor rule as a thin',
         'adapter and do not copy long common rules here.'
     )
     return ($lines -join [Environment]::NewLine)
@@ -389,9 +424,9 @@ function Get-GitHubInstructionsContent {
         '',
         '# AI Client Governance Instructions',
         '',
-        'This repository uses `.codex/ai-client-governance/` as the shared AI execution framework.',
-        'Before working, read `AGENTS.md`, `.codex/ai-client-governance/AGENTS.md`, and',
-        '`.codex/project/rules/project/AGENTS.md`. Keep this file as a thin adapter',
+        'This repository uses `.ai-client/ai-client-governance/` as the shared AI execution framework.',
+        'Before working, read `AGENTS.md`, `.ai-client/ai-client-governance/AGENTS.md`, and',
+        '`.ai-client/project/rules/project/AGENTS.md`. Keep this file as a thin adapter',
         'for GitHub Copilot instructions.'
     )
     return ($lines -join [Environment]::NewLine)
@@ -419,7 +454,7 @@ function Get-ProjectRulesPlaceholder {
         '## Scope',
         '',
         '- This file records only this project''s specific rules.',
-        '- Common AI execution workflow rules live in `.codex/ai-client-governance/AGENTS.md`.',
+        '- Common AI execution workflow rules live in `.ai-client/ai-client-governance/AGENTS.md`.',
         '- Do not write project-specific rules back to the common `ai-client-governance` repo.',
         '- Add local directory, business, documentation, source snapshot, runtime,',
         '  deliverable, and maintenance requirements here or in nearby Markdown files.'
@@ -448,6 +483,10 @@ $source = Get-DefaultRulesSource
 $effectiveBranch = Get-DefaultBranch
 $submoduleGitOptions = Get-SubmoduleGitOptions -Source $source
 $relativeEmbed = $EmbedPath.Replace("\", "/")
+
+if ($Mode -ne "existing") {
+    Warn-If-LocalSourceDirty -Source $source
+}
 
 Write-Host "AI Client Governance install preflight"
 Write-Host "- Target project: $TargetProjectPath"
@@ -509,6 +548,9 @@ elseif ($Mode -eq "submodule") {
         Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs $gitArgs -GitOptions $submoduleGitOptions
     } | Out-Null
 }
+elseif ($Mode -eq "existing") {
+    throw "Mode existing requires an existing Git repository at $relativeEmbed. Put ai-client-governance there first, or use -Mode clone/-Mode submodule."
+}
 else {
     Invoke-InstallAction -Description "Create embed parent directory $embedParent" -Action {
         New-Item -ItemType Directory -Path $embedParent -Force | Out-Null
@@ -534,7 +576,8 @@ else {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$backupRoot = Join-Path $TargetProjectPath ".codex\ai-client-governance-backups\$timestamp"
+$backupRoot = Join-Path $TargetProjectPath ".ai-client\ai-client-governance-backups\$timestamp"
+$generateAgentAdapters = [bool]($InstallAgentAdapters -or $ForceAgentAdapters)
 
 if (-not $SkipRootEntry) {
     if ($ForceRootEntry) {
@@ -544,7 +587,7 @@ if (-not $SkipRootEntry) {
         Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot -OnlyIfMissing
     }
 }
-if (-not $SkipAgentAdapters) {
+if ($generateAgentAdapters) {
     foreach ($adapter in Get-AgentAdapterFiles) {
         if ($ForceAgentAdapters) {
             Write-GeneratedFile -RelativePath $adapter.RelativePath -Content $adapter.Content -BackupRoot $backupRoot
@@ -555,30 +598,49 @@ if (-not $SkipAgentAdapters) {
     }
 }
 if (-not $SkipProjectPlaceholder) {
-    Write-GeneratedFile -RelativePath ".codex\project\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
+    Write-GeneratedFile -RelativePath ".ai-client\project\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
 }
 
-$configDir = Join-Path $TargetProjectPath ".codex"
 $configSourceRepoUrl = $source
-$agentAdapters = @("AGENTS.md") + ((Get-AgentAdapterFiles) | ForEach-Object { $_.RelativePath.Replace("\", "/") })
+$availableAgentAdapters = @((Get-AgentAdapterFiles) | ForEach-Object { $_.RelativePath.Replace("\", "/") })
+$agentAdapters = @("AGENTS.md")
+if ($generateAgentAdapters) {
+    $agentAdapters += $availableAgentAdapters
+}
 $config = [ordered]@{
-    schema_version = 3
-    mode = if ($Mode -eq "submodule") { "git-submodule" } else { "nested-git-clone" }
+    schema_version = 4
+    mode = if ($Mode -eq "submodule") { "git-submodule" } elseif ($Mode -eq "existing") { "existing-embedded-git-repository" } else { "nested-git-clone" }
     distributionMode = "embedded-git-repository"
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     sourceRepoUrl = $configSourceRepoUrl
     sourceRepoPath = $RulesRepoPath
     embeddedRepoPath = $EmbedPath.Replace("\", "/")
-    commonEntry = ".codex/ai-client-governance/AGENTS.md"
-    commonEntrySemantics = "agent-neutral workflow source; AGENTS.md is a compatibility filename"
-    projectEntry = ".codex/project/rules/project/AGENTS.md"
+    commonEntry = ".ai-client/ai-client-governance/AGENTS.md"
+    commonEntrySemantics = "agent-neutral workflow source exposed through an adapter filename"
+    projectEntry = ".ai-client/project/rules/project/AGENTS.md"
+    layout = [ordered]@{
+        aiClientRoot = ".ai-client"
+        commonRepoName = "ai-client-governance"
+        commonRepoPath = ".ai-client/ai-client-governance"
+        projectPath = ".ai-client/project"
+        configPath = ".ai-client/ai-client-governance-config.json"
+    }
+    structuredRecords = [ordered]@{
+        store = ".ai-client/project/state/aicg.db"
+        engine = "sqlite"
+        schemaVersion = 1
+        markdownPolicy = "Markdown task tracking is a human-readable export or historical audit artifact, not the primary gate input for new tasks."
+    }
+    oldLayoutPolicy = "The previous .codex governance layout is not supported. Do not write adapters, state, records, tools, skills, or fallbacks there."
     agentEntryAdapters = $agentAdapters
+    availableAgentEntryAdapters = $availableAgentAdapters
     adapterPolicy = [ordered]@{
-        generateMissingAdapters = (-not $SkipAgentAdapters)
+        generateMissingAdapters = $generateAgentAdapters
+        installParameter = "InstallAgentAdapters"
         forceAgentAdapters = [bool]$ForceAgentAdapters
-        existingAdapterPolicy = if ($ForceAgentAdapters) { "backup-then-rewrite" } else { "preserve-existing" }
+        existingAdapterPolicy = if ($ForceAgentAdapters) { "backup-then-rewrite" } elseif ($generateAgentAdapters) { "preserve-existing" } else { "not-generated-by-default" }
         adapterContentPolicy = "thin-read-order-sync-boundary-only"
-        canonicalFacts = @(".codex/ai-client-governance/AGENTS.md", ".codex/project/rules/project/AGENTS.md")
+        canonicalFacts = @(".ai-client/ai-client-governance/AGENTS.md", ".ai-client/project/rules/project/AGENTS.md")
     }
     syncPolicy = [ordered]@{
         checkEverySession = $true
@@ -600,15 +662,15 @@ $config = [ordered]@{
         $null
     }
     boundaries = [ordered]@{
-        commonRulesSource = ".codex/ai-client-governance/"
+        commonRulesSource = ".ai-client/ai-client-governance/"
         priorityOrder = @("native-project-assets", "project-specialization", "ai-client-governance-common")
-        nativeProjectAssets = @("AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONVENTIONS.md", ".github/", ".cursor/", ".clinerules/", ".windsurf/", ".continue/", ".roo/", ".codex/skills/")
+        nativeProjectAssets = @("AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONVENTIONS.md", ".github/", ".cursor/", ".clinerules/", ".windsurf/", ".continue/", ".roo/", "skills/")
         nativeProjectWritePolicy = "read-index-report-only unless the user explicitly approves native asset edits"
-        projectRulesSource = ".codex/project/rules/project/"
-        commonSkillsSource = ".codex/ai-client-governance/.codex/skills/"
-        projectSkillsSource = ".codex/project/skills/"
+        projectRulesSource = ".ai-client/project/rules/project/"
+        commonSkillsSource = ".ai-client/ai-client-governance/skills/"
+        projectSkillsSource = ".ai-client/project/skills/"
         rootAgentsPolicy = "project-owned; create-if-missing; rewrite only with -ForceRootEntry"
-        agentAdapterPolicy = "project-owned; create missing adapters unless -SkipAgentAdapters; rewrite only with -ForceAgentAdapters"
+        agentAdapterPolicy = "project-owned; only AGENTS.md is generated by default; create missing tool adapters with -InstallAgentAdapters; rewrite with -ForceAgentAdapters"
         skillConflictPolicy = "native project skill wins, then project specialization, then ai-client-governance common; duplicate names require review"
         parentTracksEmbeddedCommit = ($Mode -eq "submodule")
     }
@@ -616,13 +678,13 @@ $config = [ordered]@{
         script = "install-ai-client-governance.ps1"
         planOnly = [bool]$PlanOnly
         rootEntry = if ($SkipRootEntry) { "skipped" } elseif ($ForceRootEntry) { "force-generated-with-backup" } else { "create-if-missing-preserve-existing" }
-        agentAdapters = if ($SkipAgentAdapters) { "skipped" } elseif ($ForceAgentAdapters) { "force-generated-with-backup" } else { "create-if-missing-preserve-existing" }
+        agentAdapters = if ($ForceAgentAdapters) { "force-generated-with-backup" } elseif ($InstallAgentAdapters) { "create-if-missing-preserve-existing" } else { "skipped-by-default" }
         projectPlaceholder = if ($SkipProjectPlaceholder) { "skipped" } else { "create-if-missing" }
-        existingGitRepoPolicy = if ($AdoptExistingGitRepo) { "adopt-when-requested" } else { "stop-unless-registered-submodule" }
+        existingGitRepoPolicy = if ($Mode -eq "existing") { "use-existing-embedded-repo" } elseif ($AdoptExistingGitRepo) { "adopt-when-requested" } else { "stop-unless-registered-submodule" }
         postInstallSyncCheck = (-not $SkipSyncCheck)
     }
 }
-Write-GeneratedFile -RelativePath ".codex\ai-client-governance-config.json" -Content ($config | ConvertTo-Json -Depth 8) -BackupRoot $backupRoot
+Write-GeneratedFile -RelativePath ".ai-client\ai-client-governance-config.json" -Content ($config | ConvertTo-Json -Depth 8) -BackupRoot $backupRoot
 
 if (-not $SkipSyncCheck) {
     $syncScript = Join-Path $embedTarget "check-ai-client-governance-sync.ps1"
@@ -649,10 +711,13 @@ if ($PlanOnly -or $WhatIfPreference) {
 else {
     Write-Host "AI Client Governance embedded into $TargetProjectPath"
     Write-Host "Embedded repo: $EmbedPath"
-    Write-Host "Common entry: .codex/ai-client-governance/AGENTS.md"
-    Write-Host "Project entry: .codex/project/rules/project/AGENTS.md"
-    if (-not $SkipAgentAdapters) {
+    Write-Host "Common entry: .ai-client/ai-client-governance/AGENTS.md"
+    Write-Host "Project entry: .ai-client/project/rules/project/AGENTS.md"
+    if ($generateAgentAdapters) {
         Write-Host "Agent adapters: $($agentAdapters -join ', ')"
+    }
+    else {
+        Write-Host "Agent adapters: skipped by default. Rerun with -InstallAgentAdapters to create Claude/Gemini/Copilot/Cursor/etc. thin adapters."
     }
     if (-not $NoBackup) {
         Write-Host "Changed generated files, if any, were backed up under $backupRoot"

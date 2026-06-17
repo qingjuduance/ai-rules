@@ -195,7 +195,7 @@ def load_state(path: Path) -> dict[str, Any]:
     data.setdefault("events", [])
     data.setdefault("tasks", [])
     if int(data.get("schema_version", 1)) < SCHEMA_VERSION:
-        migrate_legacy_state(data)
+        migrate_schema_v1_state(data)
     data["schema_version"] = SCHEMA_VERSION
     data["policy"].setdefault("strict_fifo", True)
     data["policy"].setdefault("max_active_tasks", 1)
@@ -204,7 +204,7 @@ def load_state(path: Path) -> dict[str, Any]:
     return data
 
 
-def migrate_legacy_state(state: dict[str, Any]) -> None:
+def migrate_schema_v1_state(state: dict[str, Any]) -> None:
     timestamp = now_iso()
     for task in state.get("tasks", []):
         original = task.get("status", "")
@@ -220,14 +220,14 @@ def migrate_legacy_state(state: dict[str, Any]) -> None:
         task["updated_at"] = timestamp
         add_history(
             task,
-            "legacy_state_migrated",
+            "schema_v1_state_migrated",
             task.get("status", ""),
             f"schema 1 status {original!r} migrated to schema 2 workflow state",
         )
         record_state_event(
             state,
             task,
-            "legacy_state_migrated",
+            "schema_v1_state_migrated",
             original,
             task.get("status", ""),
             "schema 1 queue state migrated",
@@ -865,4 +865,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

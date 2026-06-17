@@ -234,7 +234,7 @@ REQ-SELFTEST-01 已完成，REQ-SELFTEST-02 已完成；这里故意不用标准
 | 项目 | 证据 |
 |---|---|
 | worktree 创建方式 | `worktree-task create --repo self --task-slug selftest` |
-| 固定 worktree 根 | `.codex/project/.worktree/selftest` |
+| 固定 worktree 根 | `.ai-client/project/.worktree/selftest` |
 | branch 分支 | `codex/selftest` |
 | base commit 基准提交 | `abc1234` |
 | sparse checkout 策略 | 默认 sparse checkout 排除 `.source-projects`，需要时显式 `--include-source-projects`。 |
@@ -246,7 +246,7 @@ REQ-SELFTEST-01 已完成，REQ-SELFTEST-02 已完成；这里故意不用标准
 ## 当前 Git 边界
 
 - 推送边界：selftest 不 push。
-- PYTHONPYCACHEPREFIX：`.codex/project/cache/python-pycache`。
+- PYTHONPYCACHEPREFIX：`.ai-client/project/cache/python-pycache`。
 
 ## 联网核对记录
 
@@ -263,7 +263,7 @@ REQ-SELFTEST-01 已完成，REQ-SELFTEST-02 已完成；这里故意不用标准
 | 排除范围/不适用 | 不适用业务文档、真实提交、远端 push 和外部联网核对。 |
 | 实用性/可操作 | 一条命令生成临时 tracking 并检查失败/成功路径，人工步骤少。 |
 | 成本/效率 | 量化指标为 2 次 task-gate 和 1 个临时目录，耗时低。 |
-| 扩展性/兼容 | 后续可扩展更多黑盒路径，不保留旧 wrapper 兼容。 |
+| 扩展性/可演进 | 后续可扩展更多黑盒路径，旧 wrapper 直接删除。 |
 | 量化指标/统计口径/事实源 | 事实源是 selftest 命令退出码、stdout 和临时 tracking。 |
 
 ## 验证记录
@@ -580,7 +580,7 @@ def queue_command(root: Path, queue_file: Path, *args: str) -> list[str]:
 def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
     queue_file = run_dir / "task-queue.json"
     trace_id = "trace-selftest-task-id"
-    tracking = ".codex/project/records/task-tracking/selftest-task-id.md"
+    tracking = ".ai-client/project/records/task-tracking/selftest-task-id.md"
     commands_to_run = [
         queue_command(
             root,
@@ -727,6 +727,238 @@ def test_gate_pool_validate_doc_tracking_context(root: Path, run_dir: Path) -> T
     )
 
 
+def structured_payload(task_id: str) -> dict[str, object]:
+    outputs = []
+    for output_type in ("plan", "status", "final", "script", "error", "git_worktree"):
+        outputs.append(
+            {
+                "output_id": f"OUT-{task_id}-{output_type}",
+                "output_type": output_type,
+                "applicability_scope": "structured selftest scope",
+                "exclusions": "does not cover business files",
+                "objects": "temporary SQLite database",
+                "fact_source": "selftest generated JSON",
+                "completed": "structured record was generated",
+                "unfinished": "none",
+                "unverified": "none",
+                "blocked": "none",
+                "user_confirmation": "none",
+                "final_coverage": "selftest reports pass or fail",
+                "trace_id": "trace-structured-selftest",
+            }
+        )
+    return {
+        "task": {
+            "task_id": task_id,
+            "title": "structured task record selftest",
+            "status": "done",
+            "task_types": ["rules-script", "docs"],
+            "task_size": "medium",
+            "approval_label": "批准：selftest",
+            "trace_id": "trace-structured-selftest",
+        },
+        "approvals": [
+            {
+                "approval_id": f"APR-{task_id}",
+                "label": "批准：selftest",
+                "status": "approved",
+                "summary": "selftest approval",
+            }
+        ],
+        "requirements": [
+            {
+                "requirement_id": f"REQ-{task_id}-01",
+                "summary": "verify typed task records reject missing fields and pass complete records",
+                "record_decision": "recorded in SQLite",
+                "network_decision": "not applicable for local selftest",
+                "validation_decision": "task-record gate and task-gate --task-id",
+                "acceptance": "complete structured record passes gates",
+                "status": "done",
+                "action": "generated structured payload",
+                "implementation_evidence": "temporary JSON and SQLite database",
+                "validation_evidence": "task-record gate pass",
+                "final_coverage": "selftest summary includes structured gate result",
+            }
+        ],
+        "triggers": [
+            {
+                "trigger_id": f"TRG-{task_id}-01",
+                "trigger_type": "selftest",
+                "source": "selftest",
+                "matched_requirement": f"REQ-{task_id}-01",
+                "priority": "high",
+                "applicability_scope": "typed task record gate",
+                "scope_expansion": "not expanded",
+                "reason": "Markdown reverse parsing is inefficient",
+                "required_action": "write structured DB before gate",
+                "executed_steps": "apply payload and run gates",
+                "quantitative_evidence": "one invalid payload and one valid payload",
+                "status": "done",
+                "trace_id": "trace-structured-selftest",
+            }
+        ],
+        "outputs": outputs,
+        "worktrees": [
+            {
+                "worktree_id": f"WT-{task_id}-01",
+                "repo": "ai-client-governance",
+                "source_repo": "selftest",
+                "path": "selftest",
+                "branch": "codex/selftest",
+                "base_commit": "selftest",
+                "creation_method": "worktree-task",
+                "sparse_policy": "no source snapshots included",
+                "source_handling": "worktree-task create is the default path",
+                "status": "done",
+                "merged_status": "not_required",
+                "commit_status": "not_required",
+                "push_status": "not_required",
+                "next_action": "none",
+            }
+        ],
+        "validations": [
+            {
+                "validation_id": f"VAL-{task_id}-01",
+                "command": "ai_client_governance.py validate-doc --selftest",
+                "cwd": "selftest",
+                "result": "pass",
+                "summary": "validate-doc/doc-index style validation row present for docs task",
+                "evidence": "selftest fixture",
+            }
+        ],
+    }
+
+
+def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
+    task_id = "STRUCT-SELFTEST"
+    db = run_dir / "structured-selftest.db"
+    invalid_payload = structured_payload(task_id + "-BAD")
+    invalid_payload["requirements"] = []
+    invalid = run_dir / "structured-invalid.json"
+    valid = run_dir / "structured-valid.json"
+    invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "contract",
+                "describe",
+                "--task-type",
+                "rules-script",
+                "--task-type",
+                "docs",
+                "--event",
+                "write-intent",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(invalid),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(valid),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-gate",
+                "--db",
+                str(db),
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "gate-pool",
+                "--db",
+                str(db),
+                "--task-id",
+                task_id,
+                "--task-type",
+                "rules-script",
+                "--task-type",
+                "docs",
+                "--final",
+                "--dry-run",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and commands[5].exit_code == 0
+        and commands[6].exit_code == 0
+        and "requirements must contain at least one row" in (commands[2].stdout + commands[2].stderr)
+        and "--task-id" in commands[6].stdout
+    )
+    return TestResult(
+        name="structured-task-record-gate",
+        passed=passed,
+        summary=(
+            "structured task records reject missing required rows and pass DB-backed gates"
+            if passed
+            else "structured task record gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
     lines = [
         "ai-client-governance Selftest Report",
@@ -761,6 +993,7 @@ def main() -> int:
         test_multi_agent_acceptance_matrix_gate(root, run_dir),
         test_task_queue_task_id_priority(root, run_dir),
         test_gate_pool_validate_doc_tracking_context(root, run_dir),
+        test_structured_task_record_gate(root, run_dir),
     ]
     passed = all(result.passed for result in results)
 

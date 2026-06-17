@@ -4,7 +4,7 @@
 This script turns prose workflow rules into a small executable lifecycle for the
 human/AI coordination layer: input -> classification -> preflight -> execution
 evidence -> finalize. It is conservative by design. It writes only optional
-lifecycle state JSON under .codex/project/lifecycle/ and delegates heavy checks
+lifecycle state JSON under .ai-client/project/lifecycle/ and delegates heavy checks
 through the unified ai_client_governance.py CLI.
 """
 
@@ -34,7 +34,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 SCHEMA_VERSION = 1
 DEFAULT_TRACE_PREFIX = "trace-lifecycle"
-STATE_DIR = Path(".codex") / "project" / "lifecycle"
+STATE_DIR = Path(".ai-client") / "project" / "lifecycle"
 
 TEXT_EXTENSIONS = {
     ".css",
@@ -197,7 +197,7 @@ def infer_task_types(text: str, changed_paths: list[str], explicit: list[str]) -
         ".continue/rules/",
         ".roo/rules/",
     )
-    if any(path.startswith(".codex/ai-client-governance") or path.endswith(adapter_path_signals) for path in changed_paths):
+    if any(path.startswith(".ai-client/ai-client-governance") or path.endswith(adapter_path_signals) for path in changed_paths):
         if "rules-script" not in found:
             found.append("rules-script")
     return found
@@ -219,7 +219,7 @@ def estimate_task_size(
         reasons.append(f"changed paths > 3 ({len(changed_paths)})")
     if {"rules-script", "docs"}.issubset(task_types):
         reasons.append("rules-script and docs gates both apply")
-    if any(path.startswith(".codex/ai-client-governance") for path in changed_paths):
+    if any(path.startswith(".ai-client/ai-client-governance") for path in changed_paths):
         reasons.append("embedded ai-client-governance repository is in scope")
     if any(keyword in text for keyword in ["全部", "批量", "状态机", "流水线", "主从", "生命周期"]):
         reasons.append("request contains broad workflow architecture signals")
@@ -322,7 +322,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task-tracking", help="Task tracking file for gated work.")
     parser.add_argument("--approved-label", help="Approval label, for example 批准：计划-生命周期状态机门禁.")
     parser.add_argument("--trace-id", help="Trace id. Default: generated or inferred from state file.")
-    parser.add_argument("--state-file", help="Lifecycle state JSON path. Default: .codex/project/lifecycle/<trace>.json.")
+    parser.add_argument("--state-file", help="Lifecycle state JSON path. Default: .ai-client/project/lifecycle/<trace>.json.")
     parser.add_argument("--event", choices=sorted(NODE_EVENTS), help="Runtime event boundary. Default is inferred from lifecycle command.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
 
@@ -621,4 +621,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

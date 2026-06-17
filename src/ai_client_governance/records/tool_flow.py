@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render AI Client Governance tool invocation flow from the local JSONL ledger.
 
-The script is read-only. It turns .codex/project/logs/tool-invocations/*.jsonl
+The script is read-only. It turns .ai-client/project/logs/tool-invocations/*.jsonl
 records into a time-sequence flow today, and it can use optional parent fields
 when the ledger grows trace/tree support later.
 """
@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
         "--ledger-dir",
-        help="Ledger directory. Defaults to .codex/project/logs/tool-invocations under root.",
+        help="Ledger directory. Defaults to .ai-client/project/logs/tool-invocations under root.",
     )
     parser.add_argument("--task-tracking", help="Filter by task tracking substring.")
     parser.add_argument("--trace-id", help="Filter by trace id.")

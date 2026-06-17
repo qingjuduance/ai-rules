@@ -14,8 +14,8 @@ from ai_client_governance.gates import architecture_guard, gate_pool, session_ga
 from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
-from ai_client_governance.records import scan_corrections, task_queue, tool_flow, tool_invocations
-from ai_client_governance.runtime import registry as runtime_registry
+from ai_client_governance.records import scan_corrections, task_queue, task_record, tool_flow, tool_invocations
+from ai_client_governance.runtime import contract, registry as runtime_registry
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
 from ai_client_governance.worktree import coord as worktree_coord
@@ -27,6 +27,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "agent-groups": ("Report agent group status.", group_status.main),
     "architecture-guard": ("Check AI Client Governance architecture boundaries.", architecture_guard.main),
     "completion-test": ("Plan task completion tests from changed paths and task types.", completion.main),
+    "contract": ("Describe typed structured record contracts before execution.", contract.main),
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
     "doc-index": ("Build and check Markdown document reference indexes.", doc_index.main),
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
@@ -38,6 +39,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "sync-check": ("Check embedded ai-client-governance synchronization state.", sync_check.main),
     "task-gate": ("Validate task-type evidence.", task_gate.main),
     "task-queue": ("Manage task workflow state.", task_queue.main),
+    "task-record": ("Manage typed SQLite task records.", task_record.main),
     "templates": ("Render Markdown templates.", templates.main),
     "selftest": ("Run ai-client-governance black-box self-tests.", selftest.main),
     "tool-flow": ("Report invocation trace flow.", tool_flow.main),

@@ -4,7 +4,7 @@ description: >
   Record and refine Codex correction notes for this repository. Use when the
   user says Codex missed something, planned poorly, violated repo rules, needs
   a correction written down, asks to update requirements from accumulated
-  mistakes, or asks to organize `.codex/project/records/corrections/` into durable `AGENTS.md`,
+  mistakes, or asks to organize `.ai-client/project/records/corrections/` into durable `AGENTS.md`,
   README, or skill rules.
 ---
 
@@ -24,8 +24,8 @@ interview answers, or project documentation.
 1. Read the local rules first:
    - `AGENTS.md`
    - `README.md`
-   - `.codex/project/records/corrections/README.md`
-   - `.codex/project/records/corrections/index.md`
+   - `.ai-client/project/records/corrections/README.md`
+   - `.ai-client/project/records/corrections/index.md`
    - the current task tracking document when one exists
 
 2. Classify the user feedback:
@@ -36,9 +36,9 @@ interview answers, or project documentation.
      them as lightweight, minor, or ordinary suggestions unless the user
      explicitly says the issue is minor.
 
-3. For a new correction, create or update one file under `.codex/project/records/corrections/`:
+3. For a new correction, create or update one file under `.ai-client/project/records/corrections/`:
    - File name format: `YYYY-MM-DD-错误关键词.md`.
-   - Use the template from `.codex/project/records/corrections/README.md`.
+   - Use the template from `.ai-client/project/records/corrections/README.md`.
    - Keep the note focused on one mistake, root cause, candidate rule, status,
      and related task tracking.
    - Record severity as high by default for user-pointed Codex mistakes, unless
@@ -47,7 +47,7 @@ interview answers, or project documentation.
    - Record an impact audit: affected corrections, index/status summaries,
      current tracking, pending return action, task/session gates, relevant
      skills/scripts, and final-response wording.
-   - Update `.codex/project/records/corrections/index.md` in the same task.
+   - Update `.ai-client/project/records/corrections/index.md` in the same task.
    - Treat the independent correction file as the fact source; `index.md`
      is only a derived summary.
 
@@ -73,16 +73,16 @@ interview answers, or project documentation.
 7. After every use, record data handling and tooling observation:
    - In task tracking, record which correction records were read, how they were
      grouped, and which items stayed under observation.
-   - In `.codex/project/records/corrections/index.md`, update the tooling observation table when
+   - In `.ai-client/project/records/corrections/index.md`, update the tooling observation table when
      the workflow involved repeated reading, status counting, grouping,
      rule planning, or status maintenance.
    - Do not define a fixed threshold for tool creation yet; keep counting usage
      and repeated manual steps until the data justifies a tool.
    - If a tool is justified, propose it first. The first command should be
-     `.codex/ai-rules/scripts/ai_rules.py scan-corrections`, and its first version should only scan
+     `scripts/ai_client_governance.py scan-corrections`, and its first version should only scan
      corrections, count statuses, group error types, and output a report.
      It must not edit `AGENTS.md`, README, skills, correction records, or indexes.
-   - After `ai_rules.py scan-corrections` exists, run it before summarizing
+   - After `ai_client_governance.py scan-corrections` exists, run it before summarizing
      correction status or tooling observations when the repository is available.
      Record its report summary in the current task tracking document.
    - Treat the script output as an audit aid. A human-approved task still decides
@@ -90,7 +90,7 @@ interview answers, or project documentation.
 
 ## Boundaries
 
-- Keep `.codex/project/records/corrections/` as process audit material, not formal learning content.
+- Keep `.ai-client/project/records/corrections/` as process audit material, not formal learning content.
 - Do not create `questions/` files for Codex workflow corrections.
 - Do not turn every correction into a permanent rule; prefer precise, reusable rules.
 - Do not equate `暂不升级` with low severity. User-pointed mistakes remain
@@ -100,7 +100,7 @@ interview answers, or project documentation.
   correction records if the two disagree.
 - Do not create scripts just because a workflow exists. First preserve data,
   observe frequency, then propose a read-only reporting tool when repetition is clear.
-- `ai_rules.py scan-corrections` is read-only. Its first report version covers:
+- `ai_client_governance.py scan-corrections` is read-only. Its first report version covers:
   status counts, error-type groups, upgrade counts, index rows missing record files,
   records missing from the index, status/type/upgrade mismatches, candidate upgrades,
   and observation items.
@@ -109,10 +109,10 @@ interview answers, or project documentation.
 ## Validation
 
 - Search for the new entries:
-  `rg -n "修正文档|corrections|self-correction-planner|工具化观察|scan-corrections|继续观察" AGENTS.md README.md .codex`
+  `rg -n "修正文档|corrections|self-correction-planner|工具化观察|scan-corrections|继续观察" AGENTS.md README.md skills src`
 - Check Markdown formatting:
-  `git diff --check -- AGENTS.md README.md .codex`
+  `git diff --check -- AGENTS.md README.md skills src`
 - Run the read-only corrections scan after adding or changing it:
-  `python .codex/ai-rules/scripts/ai_rules.py scan-corrections`
+  `python scripts/ai_client_governance.py scan-corrections`
 - When this skill is changed, run:
-  `python <skill-creator>/scripts/quick_validate.py .codex/ai-rules/.codex/skills/self-correction-planner`
+  `python <skill-creator>/scripts/quick_validate.py skills/self-correction-planner`

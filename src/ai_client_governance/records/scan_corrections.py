@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only report for .codex/project/records/corrections records.
+"""Read-only report for .ai-client/project/records/corrections records.
 
 The script scans independent correction records and the derived index, then
 reports status counts, error-type groups, upgrade candidates, observation
@@ -357,7 +357,7 @@ def has_inconsistencies(report: ScanReport) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Scan .codex/project/records/corrections and print a read-only report."
+        description="Scan .ai-client/project/records/corrections and print a read-only report."
     )
     parser.add_argument(
         "--root",

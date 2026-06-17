@@ -1,20 +1,46 @@
 {
   "name": "ai-client-governance",
   "description": "Reusable agent-neutral governance plugin layer for AI coding clients, embedded as a complete Git repository.",
-  "schema_version": 3,
+  "schema_version": 4,
   "distributionMode": "embedded-git-repository",
   "recommendedEmbed": {
-    "targetPath": ".codex/ai-client-governance",
+    "targetPath": ".ai-client/ai-client-governance",
     "defaultMethod": "git-submodule",
     "preferredMethod": "git-submodule",
-    "fallbackMethod": "nested-git-clone"
+    "fallbackMethod": "nested-git-clone",
+    "existingPreparedRepoMethod": "existing-embedded-git-repository"
   },
   "rulesLayout": {
     "rootEntryTarget": "AGENTS.md",
-    "commonEntry": ".codex/ai-client-governance/AGENTS.md",
-    "commonEntrySemantics": "canonical agent-neutral governance contract; AGENTS.md is a compatibility filename",
-    "projectEntry": ".codex/project/rules/project/AGENTS.md",
+    "commonEntry": ".ai-client/ai-client-governance/AGENTS.md",
+    "commonEntrySemantics": "canonical agent-neutral governance contract exposed through an adapter filename",
+    "projectEntry": ".ai-client/project/rules/project/AGENTS.md",
     "adapterStrategy": "thin-native-entrypoints-import-or-point-to-common-and-project-facts"
+  },
+  "pathLayout": {
+    "aiClientRoot": ".ai-client",
+    "commonRepoName": "ai-client-governance",
+    "commonRepoPath": "${aiClientRoot}/${commonRepoName}",
+    "projectPath": "${aiClientRoot}/project",
+    "placeholderPolicy": "Use placeholders in generated docs and command examples; use real relative Markdown links for clickable references."
+  },
+  "structuredRecords": {
+    "store": ".ai-client/project/state/aicg.db",
+    "engine": "sqlite",
+    "schemaVersion": 1,
+    "factSourcePriority": [
+      "structured-sqlite-task-record",
+      "tool-ledger-jsonl",
+      "markdown-report-or-history"
+    ],
+    "commands": {
+      "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
+      "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
+      "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
+      "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id>",
+      "taskGateStructured": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate --task-id <task-id>"
+    },
+    "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not the primary gate input for new tasks."
   },
   "designPrinciples": [
     {
@@ -68,7 +94,7 @@
       "LangGraph workflow engine unless using a self-built runner"
     ],
     "coreContext": "AgentExecutionContext",
-    "registryCommand": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components",
+    "registryCommand": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
     "componentKinds": [
       "input-filter",
       "processing-interceptor",
@@ -112,13 +138,14 @@
       "trackingEvidence": "record affected docs and references, updated files, or explicit no-impact rationale"
     },
     "executionGuarantees": {
-      "componentVisibility": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components must show matching nodes for the task context",
-      "gateExecution": "python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show executable gate steps before final runs",
+      "componentVisibility": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components must show matching nodes for the task context",
+      "gateExecution": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show executable gate steps before final runs",
       "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
-      "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .codex/ai-client-governance gitlink, worktrees.json, and related task tracking",
+      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before final gates",
+      "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"
     },
@@ -136,11 +163,13 @@
       "state-audit"
     ],
     "runtimeCommands": {
-      "components": "python .codex/ai-client-governance/scripts/ai_client_governance.py runtime components",
-      "gatePool": "python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool",
-      "completionTest": "python .codex/ai-client-governance/scripts/ai_client_governance.py completion-test",
-      "worktreeReconcile": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task reconcile --strict",
-      "hostCloseout": "python .codex/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout --repo ai-client-governance --require-task-tracking --require-clean-host"
+      "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
+      "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
+      "taskRecord": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record",
+      "gatePool": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool",
+      "completionTest": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test",
+      "worktreeReconcile": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task reconcile --strict",
+      "hostCloseout": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout --repo ai-client-governance --require-task-tracking --require-clean-host"
     }
   },
   "agentEntryAdapters": [
@@ -157,7 +186,8 @@
       "paths": [
         "CLAUDE.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -165,7 +195,8 @@
       "paths": [
         "GEMINI.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -174,7 +205,8 @@
         ".github/copilot-instructions.md",
         ".github/instructions/ai-client-governance.instructions.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -182,7 +214,8 @@
       "paths": [
         ".cursor/rules/ai-client-governance.mdc"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -190,7 +223,8 @@
       "paths": [
         ".clinerules/ai-client-governance.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -198,7 +232,8 @@
       "paths": [
         ".windsurf/rules/ai-client-governance.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -206,7 +241,8 @@
       "paths": [
         ".continue/rules/ai-client-governance.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -214,7 +250,8 @@
       "paths": [
         ".roo/rules/ai-client-governance.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
@@ -222,7 +259,8 @@
       "paths": [
         "CONVENTIONS.md"
       ],
-      "defaultGenerated": true,
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     }
   ],
@@ -242,16 +280,16 @@
   },
   "writeback": {
     "method": "git-commands-inside-embedded-repo",
-    "workingDirectory": ".codex/ai-client-governance",
+    "workingDirectory": ".ai-client/ai-client-governance",
     "requireUserApprovalForPush": true,
     "forbiddenSources": [
-      ".codex/project/rules/project/",
-      ".codex/project/skills/",
-      ".codex/project/records/task-tracking/",
-      ".codex/project/records/pending-tasks/",
-      ".codex/project/records/corrections/",
-      ".codex/project/logs/tool-invocations/",
-      ".codex/project/records/project-status/",
+      ".ai-client/project/rules/project/",
+      ".ai-client/project/skills/",
+      ".ai-client/project/records/task-tracking/",
+      ".ai-client/project/records/pending-tasks/",
+      ".ai-client/project/records/corrections/",
+      ".ai-client/project/logs/tool-invocations/",
+      ".ai-client/project/records/project-status/",
       "project-specific-documents"
     ]
   },
@@ -274,13 +312,13 @@
   },
   "repoContents": {
     "commonRules": "AGENTS.md",
-    "commonRulesSemantics": "agent-neutral governance contract exposed through AGENTS.md compatibility adapter",
+    "commonRulesSemantics": "agent-neutral governance contract exposed through the AGENTS.md adapter",
     "pythonPackage": "src/ai_client_governance",
     "runtime": "src/ai_client_governance/runtime",
     "skills": [
-      ".codex/skills/agents-rule-maintainer",
-      ".codex/skills/codex-token-usage",
-      ".codex/skills/self-correction-planner"
+      "skills/agents-rule-maintainer",
+      "skills/codex-token-usage",
+      "skills/self-correction-planner"
     ],
     "scripts": [
       "scripts/ai_client_governance.py",
@@ -288,8 +326,12 @@
       "install-ai-client-governance.ps1"
     ]
   },
-  "targetProjectGeneratedFiles": [
+  "targetProjectDefaultGeneratedFiles": [
     "AGENTS.md",
+    ".ai-client/ai-client-governance-config.json",
+    ".ai-client/project/rules/project/AGENTS.md"
+  ],
+  "targetProjectOptionalGeneratedFiles": [
     "CLAUDE.md",
     "GEMINI.md",
     "CONVENTIONS.md",
@@ -299,14 +341,13 @@
     ".clinerules/ai-client-governance.md",
     ".windsurf/rules/ai-client-governance.md",
     ".continue/rules/ai-client-governance.md",
-    ".roo/rules/ai-client-governance.md",
-    ".codex/ai-client-governance-config.json",
-    ".codex/project/rules/project/AGENTS.md"
+    ".roo/rules/ai-client-governance.md"
   ],
   "installer": {
     "script": "install-ai-client-governance.ps1",
     "defaultMode": "git-submodule",
     "fallbackMode": "nested-git-clone",
+    "existingPreparedRepoMode": "existing-embedded-git-repository",
     "supportsPlanOnly": true,
     "supportsPowerShellWhatIf": true,
     "infersSourceUrlFromOrigin": true,
@@ -315,18 +356,19 @@
     "supportsRelativeLocalPathSubmoduleSource": true,
     "existingFilesPolicy": {
       "rootAgents": "create-only-when-missing; rewrite-only-with-ForceRootEntry",
-      "agentAdapters": "create-only-when-missing; rewrite-only-with-ForceAgentAdapters; skip-with-SkipAgentAdapters",
+      "agentAdapters": "not-generated-by-default; create-missing-with-InstallAgentAdapters; rewrite-only-with-ForceAgentAdapters",
       "config": "backup-then-rewrite",
       "projectRules": "create-only-when-missing",
       "nativeProjectSkills": "preserve-existing; never-modify-without-explicit-user-approval",
       "projectSkills": "create-or-update-project-specializations-only; never-install-common-skills-into-project",
       "existingRegisteredSubmodule": "keep-and-continue",
       "existingUnregisteredGitRepo": "stop-unless-AdoptExistingGitRepo",
+      "existingPreparedEmbeddedRepo": "use-with-Mode-existing; do-not-clone-or-submodule-add",
       "existingNonGitEmbedPath": "stop-and-require-manual-review"
     },
     "postInstallSyncCheck": {
       "default": true,
-      "command": ".codex/ai-client-governance/check-ai-client-governance-sync.ps1 -NoFetch",
+      "command": ".ai-client/ai-client-governance/check-ai-client-governance-sync.ps1 -NoFetch",
       "skipParameter": "SkipSyncCheck"
     },
     "gitBoundary": {
@@ -347,40 +389,43 @@
     ".windsurf/rules/",
     ".continue/rules/",
     ".roo/rules/",
-    ".codex/project/rules/project/",
-    ".codex/project/skills/",
-    ".codex/project/records/task-tracking/",
-    ".codex/project/records/pending-tasks/",
-    ".codex/project/records/corrections/",
-    ".codex/project/records/project-status/",
-    ".codex/project/agents/",
-    ".codex/project/logs/",
-    ".codex/project/state/",
-    ".codex/project/tools/",
-    ".codex/project/cache/",
-    ".codex/project/tmp/"
+    ".ai-client/project/rules/project/",
+    ".ai-client/project/skills/",
+    ".ai-client/project/records/task-tracking/",
+    ".ai-client/project/records/pending-tasks/",
+    ".ai-client/project/records/corrections/",
+    ".ai-client/project/records/project-status/",
+    ".ai-client/project/agents/",
+    ".ai-client/project/logs/",
+    ".ai-client/project/state/",
+    ".ai-client/project/tools/",
+    ".ai-client/project/cache/",
+    ".ai-client/project/tmp/"
   ],
-  "targetProjectLegacyPathsDoNotGenerate": [
+  "forbiddenGeneratedPaths": [
     ".codex/rules/",
     ".codex/skills/",
-    ".codex/task-tracking/",
-    ".codex/pending-tasks/",
-    ".codex/corrections/",
-    ".codex/agent-comm/",
-    ".codex/agent-groups/",
-    ".codex/tool-invocations/",
-    ".codex/project-status/"
+    ".ai-client/task-tracking/",
+    ".ai-client/pending-tasks/",
+    ".ai-client/corrections/",
+    ".ai-client/agent-comm/",
+    ".ai-client/agent-groups/",
+    ".ai-client/tool-invocations/",
+    ".ai-client/project-status/"
   ],
-  "legacyPathPolicy": "do-not-generate; report-and-migrate-forward-when-in-current-scope",
+  "oldLayoutPolicy": "The previous .codex governance layout is not supported. Do not generate adapters, state, records, tools, skills, or fallbacks there; if active docs or scripts reference it, replace them with .ai-client paths. Historical audit records may mention old paths only as past facts.",
   "adapterPolicy": {
-    "defaultGenerateMissingAdapters": true,
-    "skipParameter": "SkipAgentAdapters",
+    "defaultGeneratedAdapters": [
+      "AGENTS.md"
+    ],
+    "defaultGenerateMissingAdapters": false,
+    "installParameter": "InstallAgentAdapters",
     "forceParameter": "ForceAgentAdapters",
-    "existingAdapterPolicy": "preserve-and-report",
+    "existingAdapterPolicy": "not-generated-by-default; preserve-existing-when-installing; rewrite-only-with-ForceAgentAdapters",
     "adapterContentPolicy": "thin-read-order-sync-boundary-only",
     "canonicalFacts": [
-      ".codex/ai-client-governance/AGENTS.md",
-      ".codex/project/rules/project/AGENTS.md"
+      ".ai-client/ai-client-governance/AGENTS.md",
+      ".ai-client/project/rules/project/AGENTS.md"
     ],
     "priorityOrder": [
       "native-project-assets",

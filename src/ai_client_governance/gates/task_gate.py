@@ -19,9 +19,9 @@ from pathlib import Path
 from ai_client_governance.common.paths import (
     CORRECTIONS_DIR,
     CORRECTIONS_INDEX,
-    LEGACY_CORRECTIONS_INDEX,
     PENDING_TASKS_DIR,
 )
+from ai_client_governance.records import task_record as structured_task_record
 
 
 TASK_ALIASES = {
@@ -101,7 +101,7 @@ TASK_ALIASES = {
 URL_RE = re.compile(r"https?://[^\s)>\]]+")
 REQ_ID_RE = re.compile(r"\b(?:REQ|UR)-[A-Za-z0-9][A-Za-z0-9_-]*\b")
 CORRECTION_PATH_RE = re.compile(
-    r"\.codex/(?:project/records/corrections|corrections)/[^\s`|,)]+?\.md"
+    r"\.ai-client/project/records/corrections/[^\s`|,)]+?\.md"
 )
 
 SCRIPT_CAPABILITY_SIGNALS = [
@@ -279,6 +279,20 @@ def parse_args() -> argparse.Namespace:
         default="text",
         help="Output format.",
     )
+    parser.add_argument(
+        "--task-id",
+        help="Structured task id to validate from the SQLite task-record database.",
+    )
+    parser.add_argument(
+        "--db",
+        help="Structured task-record SQLite path. Default: <ai-client-project>/state/aicg.db.",
+    )
+    parser.add_argument(
+        "--structured-event",
+        choices=("preflight", "final"),
+        default="final",
+        help="Structured task-record gate event.",
+    )
     return parser.parse_args()
 
 
@@ -356,7 +370,7 @@ def infer_task_types(text: str) -> list[str]:
         text,
         [
             CORRECTIONS_DIR.as_posix() + "/",
-            ".codex/corrections/",
+            ".ai-client/corrections/",
             "用户纠错",
             "修正文档",
         ],
@@ -380,7 +394,7 @@ def infer_task_types(text: str) -> list[str]:
         text,
         [
             PENDING_TASKS_DIR.as_posix(),
-            ".codex/pending-tasks",
+            ".ai-client/pending-tasks",
             "active pending",
             "恢复现场",
         ],
@@ -605,8 +619,6 @@ def validate_correction_records(
         return []
 
     index_path = root / CORRECTIONS_INDEX
-    if not index_path.exists() and (root / LEGACY_CORRECTIONS_INDEX).exists():
-        index_path = root / LEGACY_CORRECTIONS_INDEX
     index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
     if not index_text:
         add(errors, "error", "corrections index.md is missing or empty.", CORRECTIONS_INDEX.as_posix())
@@ -677,7 +689,7 @@ def validate_python_cache_boundary(text: str, errors: list[Finding], tracking: s
         add(
             errors,
             "error",
-            "Python script validation must record pycache redirection to .codex/project/cache.",
+            "Python script validation must record pycache redirection to .ai-client/project/cache.",
             tracking,
         )
 
@@ -698,7 +710,7 @@ def validate_applicability_gate(text: str, errors: list[Finding], tracking: str)
         ("exclusions", ["排除范围", "不适用", "丢弃", "不处理"]),
         ("practicality", ["实用性", "可操作", "人工步骤", "成本"]),
         ("efficiency", ["效率", "提速", "耗时", "读取文件数", "脚本化检查项数"]),
-        ("extensibility", ["扩展性", "可扩展", "后续升级", "兼容", "树形", "trace"]),
+        ("extensibility", ["扩展性", "可扩展", "可演进", "后续升级", "树形", "trace"]),
         ("quantitative source", ["量化", "指标", "统计口径", "事实源", "账本"]),
     ]
     for label, patterns in required_groups:
@@ -732,7 +744,7 @@ def validate_worktree_evidence(text: str, errors: list[Finding], tracking: str) 
     haystack = section if section.strip() else text
     required_groups = [
         ("git worktree command or label", ["git worktree", "worktree"]),
-        ("fixed worktree root", [".codex/project/.worktree", ".codex\\project\\.worktree"]),
+        ("fixed worktree root", [".ai-client/project/.worktree", ".ai-client\\project\\.worktree"]),
         ("branch evidence", ["分支", "branch"]),
         ("base commit evidence", ["基准提交", "base commit", "rev-parse"]),
         ("status evidence", ["git status", "工作区", "status --short"]),
@@ -1101,8 +1113,8 @@ def worktree_output_rows(rows: list[list[str]]) -> list[list[str]]:
             [
                 "worktree",
                 "Worktree",
-                ".codex/project/.worktree",
-                ".codex\\project\\.worktree",
+                ".ai-client/project/.worktree",
+                ".ai-client\\project\\.worktree",
                 "Worktree 完成记录",
             ],
         )
@@ -1167,7 +1179,7 @@ def validate_output_information_gate(text: str, errors: list[Finding], tracking:
         if not contains_any(current_row_text, ["最终输出", "最终回复", "覆盖口径"]):
             add(errors, "error", f"{output_id} lacks final output coverage.", tracking)
 
-    if contains_any(text, ["worktree", ".codex/project/.worktree", ".codex\\project\\.worktree"]):
+    if contains_any(text, ["worktree", ".ai-client/project/.worktree", ".ai-client\\project\\.worktree"]):
         worktree_rows = worktree_output_rows(rows)
         if not worktree_rows:
             add(errors, "error", "output information gate lacks worktree output object.", tracking)
@@ -1265,7 +1277,7 @@ def validate_task_type(
     elif task_type == "correction":
         if not contains_any(
             text,
-            [CORRECTIONS_DIR.as_posix(), ".codex/corrections", "correction", "修正文档"],
+            [CORRECTIONS_DIR.as_posix(), ".ai-client/corrections", "correction", "修正文档"],
         ):
             add(errors, "error", "correction task must mention correction records.", tracking)
         if "index.md" not in text:
@@ -1408,8 +1420,30 @@ def format_text(report: Report) -> str:
 
 def main() -> int:
     args = parse_args()
+    root = Path(args.root).resolve()
+    if args.task_id:
+        db = structured_task_record.db_path(root, args.db)
+        con = structured_task_record.connect(db)
+        structured_task_record.init_db(con)
+        structured_report = structured_task_record.validate_task(
+            con=con,
+            db=db,
+            task_id=args.task_id,
+            event=args.structured_event,
+            explicit_task_types=args.task_types or [],
+        )
+        if args.format == "json":
+            print(json.dumps(asdict(structured_report), ensure_ascii=False, indent=2))
+        else:
+            print(structured_task_record.format_gate_report(structured_report))
+        if structured_report.errors:
+            return 1
+        if args.fail_on_warning and structured_report.warnings:
+            return 1
+        return 0
+
     report = build_report(
-        root=Path(args.root).resolve(),
+        root=root,
         task_tracking_arg=args.task_tracking,
         explicit_task_types=args.task_types,
         require_task_types=args.require_task_types,

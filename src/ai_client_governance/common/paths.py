@@ -3,10 +3,99 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 
-PROJECT_DIR = Path(".codex") / "project"
+DEFAULT_AI_CLIENT_ROOT = Path(".ai-client")
+CONFIG_FILE_NAME = "ai-client-governance-config.json"
+COMMON_REPO_NAME = "ai-client-governance"
+
+
+def _candidate_project_roots(start: Path) -> list[Path]:
+    """Return likely host project roots from the current working directory."""
+    roots: list[Path] = []
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _expand_layout_value(value: str, values: dict[str, str]) -> str:
+    expanded = value
+    for key, replacement in values.items():
+        expanded = expanded.replace("${" + key + "}", replacement)
+    return expanded
+
+
+def _configured_layout(start: Path | None = None) -> dict[str, str]:
+    """Load the host path layout.
+
+    The neutral workspace is `.ai-client/`. There is no `.codex` fallback:
+    native client adapters should point here instead of preserving old layouts.
+    """
+    start = start or Path.cwd()
+    for root in _candidate_project_roots(start):
+        for config_path in (root / DEFAULT_AI_CLIENT_ROOT / CONFIG_FILE_NAME,):
+            if not config_path.exists():
+                continue
+            data = _read_json(config_path)
+            raw_layout = data.get("layout") if isinstance(data.get("layout"), dict) else {}
+            values = {
+                "aiClientRoot": str(raw_layout.get("aiClientRoot") or data.get("aiClientRoot") or DEFAULT_AI_CLIENT_ROOT),
+                "commonRepoName": str(raw_layout.get("commonRepoName") or COMMON_REPO_NAME),
+            }
+            common_repo_path = str(
+                raw_layout.get("commonRepoPath")
+                or data.get("embeddedRepoPath")
+                or "${aiClientRoot}/${commonRepoName}"
+            )
+            project_path = str(
+                raw_layout.get("projectPath")
+                or data.get("projectEntry", "${aiClientRoot}/project/rules/project/AGENTS.md")
+            )
+            if project_path.endswith("/rules/project/AGENTS.md") or project_path.endswith("\\rules\\project\\AGENTS.md"):
+                project_path = str(Path(project_path).parent.parent.parent)
+            values["commonRepoPath"] = _expand_layout_value(common_repo_path, values).replace("\\", "/")
+            values["projectPath"] = _expand_layout_value(project_path, values).replace("\\", "/")
+            values["configPath"] = config_path.relative_to(root).as_posix()
+            return values
+
+    for root in _candidate_project_roots(start):
+        if (root / DEFAULT_AI_CLIENT_ROOT / "project").exists() or (
+            root / DEFAULT_AI_CLIENT_ROOT / COMMON_REPO_NAME
+        ).exists():
+            return {
+                "aiClientRoot": DEFAULT_AI_CLIENT_ROOT.as_posix(),
+                "commonRepoName": COMMON_REPO_NAME,
+                "commonRepoPath": (DEFAULT_AI_CLIENT_ROOT / COMMON_REPO_NAME).as_posix(),
+                "projectPath": (DEFAULT_AI_CLIENT_ROOT / "project").as_posix(),
+                "configPath": (DEFAULT_AI_CLIENT_ROOT / CONFIG_FILE_NAME).as_posix(),
+            }
+
+    return {
+        "aiClientRoot": DEFAULT_AI_CLIENT_ROOT.as_posix(),
+        "commonRepoName": COMMON_REPO_NAME,
+        "commonRepoPath": (DEFAULT_AI_CLIENT_ROOT / COMMON_REPO_NAME).as_posix(),
+        "projectPath": (DEFAULT_AI_CLIENT_ROOT / "project").as_posix(),
+        "configPath": (DEFAULT_AI_CLIENT_ROOT / CONFIG_FILE_NAME).as_posix(),
+    }
+
+
+LAYOUT = _configured_layout()
+AI_CLIENT_ROOT = Path(LAYOUT["aiClientRoot"])
+COMMON_REPO_PATH = Path(LAYOUT["commonRepoPath"])
+CONFIG_PATH = Path(LAYOUT["configPath"])
+PROJECT_DIR = Path(LAYOUT["projectPath"])
 
 PROJECT_RULES_DIR = PROJECT_DIR / "rules"
 PROJECT_RULES_PROJECT_DIR = PROJECT_RULES_DIR / "project"
@@ -29,34 +118,15 @@ TOOL_INVOCATIONS_DIR = LOGS_DIR / "tool-invocations"
 
 STATE_DIR = PROJECT_DIR / "state"
 AI_CLIENT_GOVERNANCE_STATE_PATH = STATE_DIR / "ai-client-governance-state.json"
+STRUCTURED_DB_PATH = STATE_DIR / "aicg.db"
 
 CACHE_DIR = PROJECT_DIR / "cache"
 PYTHON_PYCACHE_DIR = CACHE_DIR / "python-pycache"
 TMP_DIR = PROJECT_DIR / "tmp"
 
-LEGACY_TASK_TRACKING_DIR = Path(".codex") / "task-tracking"
-LEGACY_RULES_DIR = Path(".codex") / "rules"
-LEGACY_PROJECT_RULES_DIR = LEGACY_RULES_DIR / "project"
-LEGACY_PROJECT_RULES_ENTRY = LEGACY_PROJECT_RULES_DIR / "AGENTS.md"
-LEGACY_SKILLS_DIR = Path(".codex") / "skills"
-LEGACY_PENDING_TASKS_DIR = Path(".codex") / "pending-tasks"
-LEGACY_CORRECTIONS_DIR = Path(".codex") / "corrections"
-LEGACY_PROJECT_STATUS_DIR = Path(".codex") / "project-status"
-LEGACY_AGENT_BRIEFS_DIR = Path(".codex") / "agent-briefs"
-LEGACY_AGENT_COMM_DIR = Path(".codex") / "agent-comm"
-LEGACY_AGENT_GROUPS_DIR = Path(".codex") / "agent-groups"
-LEGACY_TOOL_INVOCATIONS_DIR = Path(".codex") / "tool-invocations"
-LEGACY_AI_CLIENT_GOVERNANCE_STATE_PATH = Path(".codex") / "ai-client-governance-state.json"
-LEGACY_CACHE_DIR = Path(".codex") / "cache"
-LEGACY_TMP_DIR = Path(".codex") / "tmp"
-
 PENDING_INDEX = PENDING_TASKS_DIR / "index.md"
 CORRECTIONS_INDEX = CORRECTIONS_DIR / "index.md"
 AGENT_GROUP_STATUS = AGENT_GROUPS_DIR / "current-status.json"
-
-LEGACY_PENDING_INDEX = LEGACY_PENDING_TASKS_DIR / "index.md"
-LEGACY_CORRECTIONS_INDEX = LEGACY_CORRECTIONS_DIR / "index.md"
-LEGACY_AGENT_GROUP_STATUS = LEGACY_AGENT_GROUPS_DIR / "current-status.json"
 
 
 def as_posix_prefix(path: Path) -> str:
@@ -73,15 +143,15 @@ def starts_with_any(value: str | Path, roots: tuple[Path, ...]) -> bool:
 
 
 def is_task_tracking_path(value: str | Path) -> bool:
-    return starts_with_any(value, (TASK_TRACKING_DIR, LEGACY_TASK_TRACKING_DIR))
+    return starts_with_any(value, (TASK_TRACKING_DIR,))
 
 
 def is_pending_path(value: str | Path) -> bool:
-    return starts_with_any(value, (PENDING_TASKS_DIR, LEGACY_PENDING_TASKS_DIR))
+    return starts_with_any(value, (PENDING_TASKS_DIR,))
 
 
 def is_correction_path(value: str | Path) -> bool:
-    return starts_with_any(value, (CORRECTIONS_DIR, LEGACY_CORRECTIONS_DIR))
+    return starts_with_any(value, (CORRECTIONS_DIR,))
 
 
 def first_existing(root: Path, *relative_paths: Path) -> Path:
@@ -110,4 +180,3 @@ def ai_client_governance_entrypoint() -> Path:
 def ai_client_governance_src_dir() -> Path:
     """Return the package source root."""
     return ai_client_governance_root() / "src"
-

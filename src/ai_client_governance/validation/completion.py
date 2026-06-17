@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from ai_client_governance.records.task_record import connect, db_path, rows, task_row
 
 
 TEXT_SUFFIXES = {".css", ".html", ".js", ".json", ".md", ".ps1", ".py", ".toml", ".ts", ".yaml", ".yml"}
@@ -90,10 +93,33 @@ def planned_checks(task_types: list[str], changed_paths: list[str]) -> list[Plan
     return checks
 
 
-def evidence_hits(task_tracking: Path | None, checks: list[PlannedCheck]) -> dict[str, bool]:
+def structured_evidence_text(root: Path, task_id: str | None, db_override: str | None) -> str:
+    if not task_id:
+        return ""
+    path = db_path(root, db_override)
+    if not path.exists():
+        return ""
+    try:
+        con = connect(path)
+        task = task_row(con, task_id)
+        if task is None:
+            return ""
+        parts: list[str] = []
+        parts.extend(str(value) for value in dict(task).values())
+        for table in ("requirements", "triggers", "outputs", "worktrees", "validations"):
+            for row in rows(con, table, task_id):
+                parts.extend(str(value) for value in dict(row).values())
+        return "\n".join(parts)
+    except sqlite3.Error:
+        return ""
+
+
+def evidence_hits(task_tracking: Path | None, structured_text: str, checks: list[PlannedCheck]) -> dict[str, bool]:
+    evidence = structured_text
     if not task_tracking or not task_tracking.exists():
-        return {check.id: False for check in checks}
-    text = task_tracking.read_text(encoding="utf-8")
+        text = evidence
+    else:
+        text = task_tracking.read_text(encoding="utf-8") + "\n" + evidence
     return {check.id: check.id in text or check.command.split()[0] in text for check in checks}
 
 
@@ -103,6 +129,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-type", action="append", default=[], help="Task type in scope; repeatable.")
     parser.add_argument("--changed-path", action="append", default=[], help="Changed path; repeatable or comma-separated.")
     parser.add_argument("--task-tracking", help="Task tracking file used for optional evidence scan.")
+    parser.add_argument("--task-id", help="Structured task id used for optional SQLite evidence scan.")
+    parser.add_argument("--db", help="Structured task-record SQLite path.")
     parser.add_argument("--require-evidence", action="store_true", help="Fail if required planned checks are not mentioned in task tracking.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
@@ -117,11 +145,13 @@ def main() -> int:
     tracking = Path(args.task_tracking) if args.task_tracking else None
     if tracking and not tracking.is_absolute():
         tracking = root / tracking
-    hits = evidence_hits(tracking, checks)
+    structured_text = structured_evidence_text(root, args.task_id, args.db)
+    hits = evidence_hits(tracking, structured_text, checks)
     missing = [check.id for check in checks if check.required and args.require_evidence and not hits.get(check.id)]
 
     payload = {
         "task_types": task_types,
+        "task_id": args.task_id or "",
         "changed_paths": changed_paths,
         "planned_checks": [asdict(check) | {"evidence_found": hits.get(check.id, False)} for check in checks],
         "missing_evidence": missing,

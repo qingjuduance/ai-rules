@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record and report AI Client Governance maintenance script invocations.
 
-The ledger is local project state under .codex/project/logs/tool-invocations/*.jsonl.
+The ledger is local project state under .ai-client/project/logs/tool-invocations/*.jsonl.
 This script intentionally avoids external dependencies and never edits rules,
 tracking, corrections, or Git state.
 """
@@ -522,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
         "--ledger-dir",
-        help="Ledger directory. Defaults to .codex/project/logs/tool-invocations under root.",
+        help="Ledger directory. Defaults to .ai-client/project/logs/tool-invocations under root.",
     )
     subparsers = parser.add_subparsers(dest="command_name", required=True)
 
