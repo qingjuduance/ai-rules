@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -74,6 +75,82 @@ class TelemetrySpan:
     source: str
     summary: str
     attributes: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TraceContext:
+    trace_id: str
+    span_id: str
+    parent_span_id: str = ""
+    trace_flags: str = "01"
+    tracestate: str = ""
+
+    @property
+    def traceparent(self) -> str:
+        return f"00-{self.trace_id}-{self.span_id}-{self.trace_flags}"
+
+
+def new_trace_id() -> str:
+    return uuid4().hex
+
+
+def new_span_id() -> str:
+    return uuid4().hex[:16]
+
+
+def parse_traceparent(value: str) -> TraceContext | None:
+    match = TRACEPARENT_RE.fullmatch(str(value or "").strip().lower())
+    if not match:
+        return None
+    return TraceContext(trace_id=match.group(1), span_id=match.group(2), trace_flags=match.group(3))
+
+
+def new_trace_context(
+    *,
+    trace_id: str = "",
+    parent_span_id: str = "",
+    span_id: str = "",
+    tracestate: str = "",
+) -> TraceContext:
+    normalized_trace, _trace_derived = normalized_trace_id(trace_id or new_trace_id())
+    normalized_span, _span_derived = normalized_span_id(span_id or new_span_id())
+    parent, _parent_derived = normalized_span_id(parent_span_id) if parent_span_id else ("", False)
+    return TraceContext(
+        trace_id=normalized_trace,
+        span_id=normalized_span,
+        parent_span_id=parent,
+        tracestate=tracestate,
+    )
+
+
+def trace_context_from_env(env: dict[str, str] | None = None) -> TraceContext:
+    current = env if env is not None else os.environ
+    parsed = parse_traceparent(current.get("TRACEPARENT", ""))
+    if parsed:
+        return TraceContext(
+            trace_id=parsed.trace_id,
+            span_id=parsed.span_id,
+            trace_flags=parsed.trace_flags,
+            tracestate=current.get("TRACESTATE", ""),
+        )
+    return new_trace_context(trace_id=current.get("CODEX_TRACE_ID", ""))
+
+
+def env_for_child(
+    *,
+    trace_id: str = "",
+    parent_span_id: str = "",
+    tracestate: str = "",
+) -> dict[str, str]:
+    context = new_trace_context(trace_id=trace_id, parent_span_id=parent_span_id, tracestate=tracestate)
+    child = {
+        "TRACEPARENT": context.traceparent,
+        "CODEX_TRACE_ID": trace_id or context.trace_id,
+        "CODEX_PARENT_INVOCATION_ID": parent_span_id or context.span_id,
+    }
+    if context.tracestate:
+        child["TRACESTATE"] = context.tracestate
+    return child
 
 
 def parse_dt(value: str | None) -> datetime | None:
@@ -982,6 +1059,91 @@ def build_effectiveness_report(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def snapshot_key(args: argparse.Namespace) -> str:
+    if args.snapshot_key:
+        return args.snapshot_key
+    if args.task_id:
+        return f"task:{args.task_id}"
+    if args.trace_id:
+        return f"trace:{args.trace_id}"
+    digest = hashlib.sha256(
+        json.dumps(
+            {"since": args.since or "", "until": args.until or "", "label": args.label or ""},
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"window:{digest}"
+
+
+def build_effectiveness_snapshot(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root).resolve()
+    spans = span_rows(
+        root,
+        db=args.db,
+        task_id=args.task_id or "",
+        trace_id=args.trace_id or "",
+        since=args.since or "",
+        until=args.until or "",
+    )
+    payload = {
+        "schema_version": 1,
+        "snapshot_key": snapshot_key(args),
+        "label": args.label or "",
+        "generated_at": utc_now(),
+        "db": str(db_path(root, args.db)),
+        "filters": {
+            "task_id": args.task_id or "",
+            "trace_id": args.trace_id or "",
+            "since": args.since or "",
+            "until": args.until or "",
+        },
+        "metrics": compact_metrics(spans),
+        "trace_context": build_trace_context_summary(spans, args.top),
+    }
+    con = state_store.connect(db_path(root, args.db))
+    state_store.upsert_state(
+        con,
+        state_type="telemetry-effectiveness-snapshot",
+        state_key=payload["snapshot_key"],
+        payload=payload,
+        source_command="ai_client_governance.py telemetry effectiveness snapshot",
+        summary=args.label or "telemetry effectiveness snapshot",
+        event_type="telemetry.effectiveness.snapshot",
+    )
+    return payload
+
+
+def build_effectiveness_trend(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root).resolve()
+    con = state_store.connect(db_path(root, args.db))
+    rows = state_store.list_states(con, state_type="telemetry-effectiveness-snapshot")
+    snapshots = [row["payload"] for row in rows if isinstance(row.get("payload"), dict)]
+    if args.task_id:
+        snapshots = [
+            item
+            for item in snapshots
+            if str(item.get("filters", {}).get("task_id") or "") == args.task_id
+        ]
+    if args.label:
+        snapshots = [item for item in snapshots if str(item.get("label") or "") == args.label]
+    snapshots.sort(key=lambda item: (str(item.get("generated_at") or ""), str(item.get("snapshot_key") or "")))
+    deltas: list[dict[str, Any]] = []
+    for before, after in zip(snapshots, snapshots[1:]):
+        deltas.append(
+            {
+                "before": before.get("snapshot_key", ""),
+                "after": after.get("snapshot_key", ""),
+                "diff": effectiveness_metric_diffs(before.get("metrics", compact_metrics([])), after.get("metrics", compact_metrics([]))),
+            }
+        )
+    return {
+        "db": str(db_path(root, args.db)),
+        "snapshot_count": len(snapshots),
+        "snapshots": snapshots[-args.top :],
+        "deltas": deltas[-args.top :],
+    }
+
+
 def format_text(report: dict[str, Any]) -> str:
     duration = report["duration_ms"]
     cache = report["cache"]
@@ -1146,6 +1308,40 @@ def format_effectiveness_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_snapshot_text(report: dict[str, Any]) -> str:
+    metrics = report["metrics"]
+    duration = metrics["duration_ms"]
+    return "\n".join(
+        [
+            "AI Client Governance Effectiveness Snapshot",
+            f"Key: {report['snapshot_key']}",
+            f"Label: {report['label'] or '<none>'}",
+            f"Spans: {metrics['span_count']} terminal={metrics['terminal_span_count']}",
+            f"Failures: {metrics['failed_count']} rate={metrics['failure_rate']:.2%}",
+            f"Duration ms: sum={duration['sum']} p95={duration['p95']} max={duration['max']}",
+        ]
+    )
+
+
+def format_trend_text(report: dict[str, Any]) -> str:
+    lines = [
+        "AI Client Governance Effectiveness Trend",
+        f"Snapshots: {report['snapshot_count']}",
+        "",
+        "Deltas:",
+    ]
+    if not report["deltas"]:
+        lines.append("  none")
+    for item in report["deltas"]:
+        duration = item["diff"]["duration_sum_ms"]
+        commands = item["diff"]["command_count"]
+        lines.append(
+            f"  {item['before']} -> {item['after']}: "
+            f"duration_delta={duration['delta']} command_delta={commands['delta']}"
+        )
+    return "\n".join(lines)
+
+
 def parse_attribute_kv(values: list[str] | None) -> dict[str, Any] | None:
     if not values:
         return None
@@ -1165,13 +1361,22 @@ def command_record(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    span_id = args.span_id or str(uuid4())
-    trace_id = args.trace_id or span_id
+    env_context = trace_context_from_env()
+    parsed_traceparent = parse_traceparent(args.traceparent or "")
+    base_context = parsed_traceparent or env_context
+    trace_id = args.trace_id or base_context.trace_id
+    span_id = args.span_id or new_span_id()
+    trace_context = new_trace_context(
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=args.parent_span_id or base_context.span_id,
+        tracestate=args.tracestate or base_context.tracestate,
+    )
     timestamp = args.timestamp or args.ended_at or args.started_at or utc_now()
     event = {
         "span_id": span_id,
         "trace_id": trace_id,
-        "parent_span_id": args.parent_span_id or "",
+        "parent_span_id": args.parent_span_id or trace_context.parent_span_id,
         "task_id": args.task_id or "",
         "task_tracking": args.task_tracking or "",
         "name": args.name or args.span_kind or "operation",
@@ -1202,9 +1407,14 @@ def command_record(args: argparse.Namespace) -> int:
         "scope_reason": args.scope_reason or "",
         "scope_paths": as_list(args.scope_path),
         "adapter_enforcement": args.adapter_enforcement or "",
+        "traceparent": trace_context.traceparent,
+        "tracestate": trace_context.tracestate,
     }
-    if attributes:
-        event["attributes"] = attributes
+    merged_attributes = attributes or {}
+    merged_attributes.setdefault("traceparent", trace_context.traceparent)
+    if trace_context.tracestate:
+        merged_attributes.setdefault("tracestate", trace_context.tracestate)
+    event["attributes"] = merged_attributes
     path = append_event(root, event, db=args.db, source_command="ai_client_governance.py telemetry record")
     print(f"recorded telemetry span={span_id} kind={event['span_kind']} status={args.status} db={path}")
     return 0
@@ -1229,6 +1439,21 @@ def command_report(args: argparse.Namespace) -> int:
 
 
 def command_effectiveness(args: argparse.Namespace) -> int:
+    action = args.effectiveness_action or "compare"
+    if action == "snapshot":
+        report = build_effectiveness_snapshot(args)
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_snapshot_text(report))
+        return 0
+    if action == "trend":
+        report = build_effectiveness_trend(args)
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(format_trend_text(report))
+        return 0
     report = build_effectiveness_report(args)
     if args.format == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -1267,6 +1492,8 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--span-id", default="", help="Explicit span id. Default: generated UUID.")
     record.add_argument("--trace-id", default="", help="Trace id shared by related spans. Default: span id.")
     record.add_argument("--parent-span-id", default="", help="Parent span id.")
+    record.add_argument("--traceparent", default="", help="W3C traceparent header to continue.")
+    record.add_argument("--tracestate", default="", help="W3C tracestate header to continue.")
     record.add_argument("--task-id", default="", help="Structured task id.")
     record.add_argument("--task-tracking", default="", help="Human-readable task tracking reference, if any.")
     record.add_argument("--task-type", action="append", help="Related task type.")
@@ -1310,9 +1537,21 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=("text", "markdown", "json"), default="text")
     report.set_defaults(func=command_report)
 
-    effectiveness = sub.add_parser("effectiveness", help="Compare before/after telemetry windows or traces.")
+    effectiveness = sub.add_parser("effectiveness", help="Compare, snapshot, or trend telemetry effectiveness.")
     common_cli_args.add_common_global_args(effectiveness, names=("root", "db"), suppress_default=True)
+    effectiveness.add_argument(
+        "effectiveness_action",
+        nargs="?",
+        choices=("compare", "snapshot", "trend"),
+        default="compare",
+        help="Default compare keeps the historical before/after behavior.",
+    )
     effectiveness.add_argument("--task-id", default="", help="Shared task id for both sides.")
+    effectiveness.add_argument("--trace-id", default="", help="Trace id for snapshot filtering.")
+    effectiveness.add_argument("--since", default="", help="Snapshot/trend window start ISO timestamp.")
+    effectiveness.add_argument("--until", default="", help="Snapshot/trend window end ISO timestamp.")
+    effectiveness.add_argument("--snapshot-key", default="", help="Snapshot key. Default derives from task/trace/window.")
+    effectiveness.add_argument("--label", default="", help="Human label for snapshot/trend filtering.")
     effectiveness.add_argument("--baseline-task-id", default="", help="Task id for the baseline side.")
     effectiveness.add_argument("--candidate-task-id", default="", help="Task id for the candidate side.")
     effectiveness.add_argument("--baseline-trace-id", default="", help="Trace id for the baseline side.")

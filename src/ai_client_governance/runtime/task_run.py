@@ -20,6 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 from ai_client_governance.common import cli_arguments as common_cli_args
+from ai_client_governance.gates import policy
 from ai_client_governance.records import task_queue, telemetry
 from ai_client_governance.runtime.scope import classify_scope
 
@@ -152,6 +153,7 @@ class PlannedCommand:
     kind: str
     reason: str
     capability: CommandCapability
+    policy_assessment: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -218,6 +220,7 @@ class TaskRunSummary:
     status: str
     command_count: int
     executed_count: int
+    pre_execution_blocked_count: int
     cache_hits: int
     cache_misses: int
     skipped_duplicate_count: int
@@ -389,6 +392,23 @@ def command_capability(command: str, kind: str) -> CommandCapability:
     )
 
 
+def command_policy_assessment(command: str) -> dict[str, Any]:
+    return policy.assessment_dict(policy.assess(command=command, subject_type="command", source="tool"))
+
+
+def policy_decision(assessment: dict[str, Any]) -> str:
+    return str(assessment.get("decision") or "allow")
+
+
+def policy_severity(assessment: dict[str, Any]) -> str:
+    return str(assessment.get("severity") or "low")
+
+
+def policy_findings(assessment: dict[str, Any]) -> list[dict[str, Any]]:
+    findings = assessment.get("findings")
+    return [item for item in findings if isinstance(item, dict)] if isinstance(findings, list) else []
+
+
 def default_commands(args: argparse.Namespace) -> list[str]:
     root = Path(args.root).resolve()
     gov = lambda *parts: governance_command(root, *parts)
@@ -438,6 +458,7 @@ def dedupe_commands(commands: list[str], cwd: str) -> tuple[list[PlannedCommand]
             kind=kind,
             reason=reason,
             capability=command_capability(normalized, kind),
+            policy_assessment=command_policy_assessment(normalized),
         )
         seen[key] = item
         planned.append(item)
@@ -501,6 +522,9 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
             "kind": command.kind,
             "reason": command.reason,
             **asdict(command.capability),
+            "policy_decision": policy_decision(command.policy_assessment),
+            "policy_severity": policy_severity(command.policy_assessment),
+            "policy_findings": policy_findings(command.policy_assessment),
         }
         for group in groups
         for command in group.commands
@@ -529,9 +553,11 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
                 "commands": [command.normalized for command in group.commands],
                 "command_ids": [command.id for command in group.commands],
                 "capabilities": [asdict(command.capability) for command in group.commands],
+                "policy": [command.policy_assessment for command in group.commands],
             }
             for group in groups
         ],
+        "policy_decisions": command_classifications,
         "command_classifications": command_classifications,
         "approval_required_count": len([item for item in command_classifications if item["approval_required"]]),
         "skipped_duplicates": [asdict(item) for item in skipped],
@@ -702,6 +728,8 @@ def telemetry_event(
 ) -> dict[str, Any]:
     timestamp = ended_at or result.started_at
     scope = classify_scope(root=Path(result.cwd), paths=[], command=result.command, cwd=result.cwd)
+    assessment = command_policy_assessment(result.command)
+    trace_context = telemetry.new_trace_context(trace_id=trace_id, span_id=invocation_id, parent_span_id="")
     return {
         "schema_version": TELEMETRY_EVENT_SCHEMA_VERSION,
         "invocation_id": invocation_id,
@@ -734,6 +762,11 @@ def telemetry_event(
         "scope_reason": scope.scope_reason,
         "scope_paths": scope.paths,
         "adapter_enforcement": os.environ.get("AICG_EXECUTION_TELEMETRY_ENFORCEMENT", "task-run-telemetry"),
+        "traceparent": trace_context.traceparent,
+        "tracestate": trace_context.tracestate,
+        "policy_decision": policy_decision(assessment),
+        "policy_severity": policy_severity(assessment),
+        "policy_findings": policy_findings(assessment),
     }
 
 
@@ -797,6 +830,41 @@ def with_final_telemetry(
     return replace(result, telemetry_path=str(path))
 
 
+def policy_failure(command: PlannedCommand, args: argparse.Namespace) -> tuple[bool, str]:
+    decision = policy_decision(command.policy_assessment)
+    fail_on = getattr(args, "policy_fail_on", "approval_required")
+    if decision == "approval_required" and getattr(args, "policy_approval_label", ""):
+        return False, ""
+    if policy.decision_fails(decision, fail_on):
+        findings = policy_findings(command.policy_assessment)
+        summary = ", ".join(
+            f"{item.get('category')}:{item.get('severity')}:{item.get('action')}"
+            for item in findings[:5]
+        )
+        return True, summary or f"policy decision={decision}"
+    return False, ""
+
+
+def policy_blocked_result(command: PlannedCommand, group_id: str, reason: str, started_at: str) -> ExecutionResult:
+    return ExecutionResult(
+        node_id=command.id,
+        group_id=group_id,
+        command=command.normalized,
+        cwd=command.cwd,
+        kind=command.kind,
+        status="policy-blocked",
+        exit_code=126,
+        duration_ms=0,
+        cached=False,
+        cache_key="",
+        cache_reason="policy blocked before execution",
+        stdout_tail="",
+        stderr_tail=tail_text(f"policy blocked command before execution: {reason}"),
+        started_at=started_at,
+        ended_at=utc_now(),
+    )
+
+
 def run_one_command(
     command: PlannedCommand,
     group_id: str,
@@ -829,6 +897,10 @@ def run_one_command(
         started_at=started_at,
         ended_at="",
     )
+    failed_policy, failure_reason = policy_failure(command, args)
+    if failed_policy:
+        result = policy_blocked_result(command, group_id, failure_reason, started_at)
+        return with_final_telemetry(root, args, result, trace_id=trace_id, invocation_id=invocation_id)
     if not getattr(args, "no_telemetry", False):
         try:
             record_telemetry_status(
@@ -877,6 +949,7 @@ def run_one_command(
         cache_reason = reason
 
     try:
+        child_trace_env = telemetry.env_for_child(trace_id=trace_id, parent_span_id=invocation_id)
         completed = subprocess.run(
             command.normalized,
             cwd=command.cwd,
@@ -888,7 +961,8 @@ def run_one_command(
             timeout=args.timeout_seconds or None,
             env={
                 **os.environ,
-                "CODEX_TRACE_ID": trace_id,
+                **child_trace_env,
+                "CODEX_TRACE_ID": child_trace_env.get("CODEX_TRACE_ID", trace_id),
                 "CODEX_PARENT_INVOCATION_ID": invocation_id,
                 "CODEX_TASK_NODE_ID": command.id,
                 "PYTHONIOENCODING": "utf-8",
@@ -932,7 +1006,7 @@ def run_one_command(
 
 def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> TaskRunReport:
     root = Path(args.root).resolve()
-    trace_id = args.trace_id or f"trace-task-run-{datetime.now().strftime('%Y%m%d')}-{safe_id(args.task_id or 'run').lower()}"
+    trace_id = args.trace_id or telemetry.new_trace_context().trace_id
     start = now_ms()
     input_paths = args.input_path or args.changed_path
     input_hashes = input_fingerprints(root, input_paths)
@@ -957,6 +1031,8 @@ def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> Task
         if args.fail_fast and any(result.exit_code != 0 for result in results if result.group_id == group.id):
             break
 
+    pre_execution_blocked = [item for item in results if item.status == "policy-blocked"]
+    actually_executed = [item for item in results if item.status != "policy-blocked" and not item.cached]
     failed = [item for item in results if item.exit_code != 0]
     cache_hits = [item for item in results if item.cached]
     cache_misses = [item for item in results if args.cache and not item.cached and item.cache_key]
@@ -965,7 +1041,8 @@ def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> Task
         trace_id=trace_id,
         status="failed" if failed else "succeeded",
         command_count=sum(len(group.commands) for group in plan.groups),
-        executed_count=len(results) - len(cache_hits),
+        executed_count=len(actually_executed),
+        pre_execution_blocked_count=len(pre_execution_blocked),
         cache_hits=len(cache_hits),
         cache_misses=len(cache_misses),
         skipped_duplicate_count=plan.skipped_duplicate_count,
@@ -1220,6 +1297,8 @@ def build_diagnostics(
         "coordination": coord_summary(coord_root),
         "run": {
             "result_count": len(run_results),
+            "executed_count": len([item for item in run_results if item.status != "policy-blocked" and not item.cached]),
+            "pre_execution_blocked_count": len([item for item in run_results if item.status == "policy-blocked"]),
             "failed_count": len([item for item in run_results if item.exit_code != 0]),
             "cache_hits": len([item for item in run_results if item.cached]),
             "cache_misses": len([item for item in run_results if item.cache_key and not item.cached]),
@@ -1320,7 +1399,8 @@ def format_plan_text(plan: CommandCompressionPlan) -> str:
                 f"    {command.id}: {command.normalized} "
                 f"[capability={cap.capability} side_effect={cap.side_effect} risk={cap.risk_level} "
                 f"cache_eligible={cap.cache_eligible} parallel_eligible={cap.parallel_eligible} "
-                f"approval_required={cap.approval_required}]"
+                f"approval_required={cap.approval_required} "
+                f"policy={policy_decision(command.policy_assessment)}/{policy_severity(command.policy_assessment)}]"
             )
     if plan.skipped_duplicates:
         lines.append("")
@@ -1340,6 +1420,7 @@ def format_run_text(report: TaskRunReport) -> str:
         f"Status: {report.summary.status}",
         f"Commands: {report.summary.command_count}",
         f"Executed: {report.summary.executed_count}",
+        f"Pre-execution blocked: {report.summary.pre_execution_blocked_count}",
         f"Cache hits: {report.summary.cache_hits}",
         f"Cache misses: {report.summary.cache_misses}",
         f"Failures: {report.summary.failed_count}",
@@ -1450,6 +1531,17 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
     run.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
     run.add_argument("--task-tracking", default="", help="Optional historical task tracking path.")
+    run.add_argument(
+        "--policy-fail-on",
+        choices=("none", "warn", "approval_required", "block"),
+        default="approval_required",
+        help="Fail before execution when unified policy decision is at least this level.",
+    )
+    run.add_argument(
+        "--policy-approval-label",
+        default="",
+        help="Explicit approval label that allows approval_required commands; block decisions still fail.",
+    )
     run.add_argument("--no-telemetry", action="store_true", help="Do not write execution telemetry events. Use only for isolated tests.")
     run.add_argument("--format", choices=("text", "json"), default="text")
 

@@ -49,6 +49,7 @@ MUTATING_COMMANDS = {
     "block",
     "cancel",
     "reject",
+    "transition",
     "heartbeat",
 }
 
@@ -150,12 +151,26 @@ def parse_args() -> argparse.Namespace:
     reject.add_argument("--task-id", required=True)
     reject.add_argument("--reason", required=True)
 
+    transition = sub.add_parser("transition", help="Advance queue and task-record lifecycle state together.")
+    common_cli_args.add_common_global_args(transition, suppress_default=True)
+    transition.add_argument("--task-id", required=True)
+    transition.add_argument(
+        "--to",
+        required=True,
+        choices=("candidate", "awaiting_approval", "ready", "active", "verifying", "done", "blocked", "cancelled"),
+        help="Unified lifecycle status; queue completed and task-record done are normalized from done.",
+    )
+    transition.add_argument("--summary", default="")
+    transition.add_argument("--approval-label", default="", help="Approval label required when transitioning to ready/active.")
+    transition.add_argument("--force", action="store_true", help="Allow metadata sync when the existing queue transition is not legal.")
+
     status = sub.add_parser("status", help="Print queue status.")
     common_cli_args.add_common_global_args(status, suppress_default=True)
 
     lifecycle = sub.add_parser("lifecycle", help="Print a unified queue/task-record lifecycle view.")
     common_cli_args.add_common_global_args(lifecycle, suppress_default=True)
     lifecycle.add_argument("--task-id", help="Only report one task id.")
+    lifecycle.add_argument("--fail-on-drift", action="store_true", help="Exit non-zero when missing/status/trace drift exists.")
 
     heartbeat = sub.add_parser("heartbeat", help="Print a periodic queue heartbeat.")
     common_cli_args.add_common_global_args(heartbeat, suppress_default=True)
@@ -609,6 +624,16 @@ def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dic
         if record_id not in used_record:
             entries.append(lifecycle_entry(task_id=record_id, queue_task=None, record_task=record_task))
     warnings = sorted({warning for entry in entries for warning in entry["warnings"]})
+    blocking_warnings = sorted(
+        {
+            warning
+            for entry in entries
+            for warning in entry["warnings"]
+            if warning in {"status_drift", "trace_id_drift", "id_trace_drift"}
+            or (warning == "missing_in_task_record" and entry.get("task_queue", {}).get("exists"))
+            or (bool(task_id) and warning == "missing_in_queue")
+        }
+    )
     status_counts = Counter(str(entry.get("lifecycle_status") or "unknown") for entry in entries)
     queue_total = len(queue_tasks)
     record_total = len(record_rows)
@@ -621,6 +646,7 @@ def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dic
         "status_counts": dict(status_counts),
         "task_record_minus_queue_total": record_total - queue_total,
         "warnings": warnings,
+        "blocking_warnings": blocking_warnings,
         "entries": entries,
         "status_mapping": {
             "task_queue.completed": "done",
@@ -681,6 +707,7 @@ def render_lifecycle(summary: dict[str, Any]) -> str:
         + ", ".join(f"{key}={value}" for key, value in sorted(summary["status_counts"].items()) if value),
         f"Task-record minus queue total: {summary['task_record_minus_queue_total']}",
         f"Warnings: {', '.join(summary['warnings']) if summary['warnings'] else 'none'}",
+        f"Blocking warnings: {', '.join(summary.get('blocking_warnings') or []) if summary.get('blocking_warnings') else 'none'}",
         "",
     ]
     for entry in summary["entries"]:
@@ -895,6 +922,114 @@ def command_reject(args: argparse.Namespace, root: Path, path: Path) -> int:
     return 0
 
 
+def queue_status_for_lifecycle(status: str) -> str:
+    return "completed" if status == "done" else status
+
+
+def record_status_for_lifecycle(status: str) -> str:
+    return "done" if status == "done" else status
+
+
+def update_task_record_status(path: Path, task_id: str, status: str, summary: str) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False, "updated": False, "warning": "task-record db missing"}
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        table = con.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").fetchone()
+        if table is None:
+            return {"exists": False, "updated": False, "warning": "task-record tasks table missing"}
+        row = con.execute("SELECT status FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if row is None:
+            return {"exists": False, "updated": False, "warning": "task missing in task-record"}
+        now = now_iso()
+        record_status = record_status_for_lifecycle(status)
+        with con:
+            con.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?",
+                (record_status, now, task_id),
+            )
+            event_table = con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'"
+            ).fetchone()
+            if event_table is not None:
+                con.execute(
+                    """
+                    INSERT INTO events(event_id, task_id, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"EVT-{task_id}-LIFECYCLE-{uuid.uuid4().hex[:8]}",
+                        task_id,
+                        "task-queue.transition",
+                        json.dumps(
+                            {
+                                "to": status,
+                                "task_record_status": record_status,
+                                "summary": summary,
+                                "source": "ai_client_governance.py task-queue transition",
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        now,
+                    ),
+                )
+        return {
+            "exists": True,
+            "updated": True,
+            "from_status": str(row["status"]),
+            "to_status": record_status,
+        }
+    finally:
+        con.close()
+
+
+def command_transition(args: argparse.Namespace, root: Path, path: Path) -> int:
+    state = load_state(path)
+    task = find_task(state["tasks"], task_id=args.task_id)
+    queue_result: dict[str, Any] = {"exists": task is not None, "updated": False}
+    queue_status = queue_status_for_lifecycle(args.to)
+    summary = args.summary or f"unified lifecycle transition to {args.to}"
+    if task:
+        if args.approval_label:
+            task["approval_label"] = args.approval_label
+        try:
+            transition_task(state, task, queue_status, "lifecycle_transition", summary)
+            queue_result.update({"updated": True, "from_status": task["history"][-1].get("from_status", ""), "to_status": queue_status})
+        except ValueError as exc:
+            if not args.force:
+                print(str(exc), file=sys.stderr)
+                return 1
+            from_status = str(task.get("status") or "")
+            task["status"] = queue_status
+            task["updated_at"] = now_iso()
+            if queue_status == "active":
+                task["started_at"] = now_iso()
+            if queue_status == "completed":
+                task["completed_at"] = now_iso()
+            add_history(task, "lifecycle_transition_forced", queue_status, summary, from_status=from_status)
+            record_state_event(state, task, "lifecycle_transition_forced", from_status, queue_status, summary)
+            queue_result.update({"updated": True, "from_status": from_status, "to_status": queue_status, "forced": True})
+        save_state(path, state)
+    record_result = update_task_record_status(path, args.task_id, args.to, summary)
+    lifecycle = lifecycle_summary(root, path, args.task_id)
+    payload = {
+        "state_db": path.as_posix(),
+        "task_id": args.task_id,
+        "to": args.to,
+        "queue": queue_result,
+        "task_record": record_result,
+        "lifecycle": lifecycle,
+    }
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"transitioned {args.task_id} to {args.to}")
+        print(render_lifecycle(lifecycle))
+    return 0 if queue_result.get("updated") or record_result.get("updated") else 1
+
+
 def validate_state(state: dict[str, Any], args: argparse.Namespace) -> tuple[list[Finding], list[Finding], list[str]]:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -986,7 +1121,7 @@ def command_lifecycle(args: argparse.Namespace, root: Path, path: Path) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         print(render_lifecycle(summary))
-    return 0
+    return 1 if args.fail_on_drift and summary.get("blocking_warnings") else 0
 
 
 def command_heartbeat(args: argparse.Namespace, root: Path, path: Path) -> int:
@@ -1029,6 +1164,8 @@ def dispatch_command(args: argparse.Namespace, root: Path, path: Path) -> int:
         return command_cancel(args, root, path)
     if args.command == "reject":
         return command_reject(args, root, path)
+    if args.command == "transition":
+        return command_transition(args, root, path)
     if args.command == "status":
         return command_status(args, root, path)
     if args.command == "lifecycle":

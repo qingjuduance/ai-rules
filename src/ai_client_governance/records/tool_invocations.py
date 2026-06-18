@@ -189,6 +189,7 @@ def make_event(
     shell_adapter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timestamp = ended_at or started_at or now_iso()
+    trace_context = telemetry.new_trace_context(trace_id=trace_id, parent_span_id=parent_invocation_id)
     return {
         "schema_version": SCHEMA_VERSION,
         "invocation_id": invocation_id,
@@ -219,6 +220,12 @@ def make_event(
         "scope_paths": scope_paths or [],
         "adapter_enforcement": adapter_enforcement,
         "shell_adapter": shell_adapter or {},
+        "traceparent": trace_context.traceparent,
+        "tracestate": trace_context.tracestate,
+        "attributes": {
+            "traceparent": trace_context.traceparent,
+            **({"tracestate": trace_context.tracestate} if trace_context.tracestate else {}),
+        },
     }
 
 
@@ -502,6 +509,7 @@ def command_run(args: argparse.Namespace) -> int:
 
     start = time.monotonic()
     child_env = os.environ.copy()
+    child_env.update(telemetry.env_for_child(trace_id=trace_id, parent_span_id=invocation_id))
     child_env["CODEX_TRACE_ID"] = trace_id
     child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
     child_env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(root))

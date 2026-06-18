@@ -24,6 +24,7 @@ from ai_client_governance.common.paths import (
     ai_client_governance_entrypoint,
     is_correction_path,
 )
+from ai_client_governance.records import telemetry
 from ai_client_governance.runtime import AgentExecutionContext, default_registry
 
 
@@ -290,6 +291,33 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Text files changed.",
             )
         )
+    if text_paths and "security-policy" in gate_steps:
+        for path in text_paths:
+            steps.append(
+                GateStep(
+                    name="ai_client_governance.py policy assess",
+                    phase="validation",
+                    command=cli_command(
+                        py,
+                        entrypoint,
+                        "policy",
+                        "assess",
+                        "--file",
+                        path,
+                        "--subject-type",
+                        "file",
+                        "--source",
+                        "file",
+                        "--fail-on",
+                        "block",
+                    ),
+                    final_gate=args.final,
+                    reason=(
+                        "Run deterministic local security policy over changed text files for prompt injection "
+                        "and sensitive-information risk."
+                    ),
+                )
+            )
     if markdown_paths and "validate-doc" in gate_steps:
         validate_doc_args = [
             "--root",
@@ -420,6 +448,50 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 command=cli_command(py, entrypoint, "framework-debt", *debt_args),
                 final_gate=args.final,
                 reason="Surface important open framework debt before planning or closeout.",
+            )
+        )
+    telemetry_root = host_project_root(root)
+    if {"raw-shell-coverage", "task-run-diagnostics", "task-record-queue-alignment"} & gate_steps:
+        diagnose_args = [
+            "--root",
+            str(telemetry_root),
+            "diagnose",
+            *structured_db_args(args, root),
+        ]
+        if args.task_id:
+            diagnose_args.extend(["--task-id", args.task_id])
+        if args.trace_id:
+            diagnose_args.extend(["--trace-id", args.trace_id])
+        if "raw-shell-coverage" in gate_steps:
+            diagnose_args.append("--require-raw-shell-coverage")
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py task-run diagnose",
+                phase="report" if "raw-shell-coverage" not in gate_steps else "validation",
+                command=cli_command(py, entrypoint, "task-run", *diagnose_args),
+                final_gate=args.final,
+                reason=(
+                    "Report task-run telemetry, task-record/task-queue alignment, and raw-shell coverage; "
+                    "raw-shell coverage fail-closes when requested because the plugin cannot intercept host-native shell internally."
+                ),
+            )
+        )
+    if "shell-adapter-diagnostics" in gate_steps:
+        shell_args = [
+            "--root",
+            str(telemetry_root),
+            *structured_db_args(args, root),
+            "diagnose",
+        ]
+        if args.task_id:
+            shell_args.extend(["--task-id", args.task_id])
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py shell-adapter diagnose",
+                phase="report",
+                command=cli_command(py, entrypoint, "shell-adapter", *shell_args),
+                final_gate=args.final,
+                reason="Report shell-adapter installation and telemetry evidence separately from raw host shell coverage.",
             )
         )
     if "git-state-audit" in gate_steps:
@@ -677,6 +749,7 @@ def run_record(
     if exit_code is not None:
         command.extend(["--exit-code", str(exit_code)])
     env = os.environ.copy()
+    env.update(telemetry.env_for_child(trace_id=trace_id))
     env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(telemetry_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
@@ -728,6 +801,7 @@ def run_step(
     wrapper.append("--")
     wrapper.extend(step.command)
     env = os.environ.copy()
+    env.update(telemetry.env_for_child(trace_id=trace_id, parent_span_id=parent_id))
     env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(telemetry_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"

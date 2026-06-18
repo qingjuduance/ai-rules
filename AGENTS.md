@@ -242,8 +242,15 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   状态变更、Git 写入、锁、task-record apply 和未知副作用命令必须顺序执行且不缓存。
 - `task-run plan` 的每条命令必须暴露 capability 事实：`capability`、`risk_level`、
   `side_effect`、`cache_eligible`、`parallel_eligible`、`approval_required` 和
-  `approval_reason`。这些字段先作为 command-compression event 和后续 policy engine
-  的稳定输入；启发式分类不得在同一节点里直接替代审批或安全策略阻断。
+  `approval_reason`，并附带统一 policy 事实：`policy_decision`、`policy_severity`
+  和 `policy_findings`。`task-run run` 默认在 subprocess 前阻断 `block` 或未携带明确
+  `--policy-approval-label` 的 `approval_required` 命令；启发式 capability 分类只能作为
+  policy 输入，不能绕过审批、敏感信息、命令注入、供应链、Git 写入或删除风险门禁。
+- 统一安全策略入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py policy assess ...`。
+  `security-policy` gate 只检查已进入治理路径的命令、文本或文件；宿主客户端内部裸 shell
+  不属于本仓库可直接拦截的 runtime surface，必须通过 fail-closed 诊断、wrapper 执行
+  或 task record 中的显式 bypass 风险记录治理。
 - `task-run run`、`gate-pool`、`shell-adapter`、`telemetry record` 和命令适配器
   `tool-invocations run/record`
   默认把执行 span、事件、耗时、失败、cache、scope 和 trace 写入
@@ -299,11 +306,15 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry effectiveness ...`；
   它比较 before/after trace、task 或时间窗口，量化耗时、验证耗时、命令数、失败率、
   cache hit/miss、重复 subject 和 gate/completion/final-gate 数量差异。
+  `telemetry effectiveness snapshot` 必须把可复用指标写入 `governance_state`，
+  `telemetry effectiveness trend` 从 DB 快照中产出趋势；不能新增默认 JSON/Markdown 活体事实源。
   新增模型 HTTP、子 AI、token usage 或外部 API 调用统计时，必须扩展同一 telemetry
   span/event 模型，不能再新增并行日志体系。
-- `task-queue lifecycle` 是 task queue 与 structured task record 的只读统一生命周期视图：
+- `task-queue lifecycle` 是 task queue 与 structured task record 的统一生命周期视图：
   queue `completed` 与 task record `done` 都归一为 lifecycle `done`，并报告缺失、状态漂移
-  和 trace_id 漂移；它不隐式写回任一事实源。
+  和 trace_id 漂移；`--fail-on-drift` 可作为只读强门禁。生命周期写入必须使用
+  `task-queue transition --task-id <id> --to <status>` 这类显式命令，同步 queue 与
+  task-record 并写入事件，不能由只读报告隐式写回任一事实源。
 - 设计新的治理执行结构、缓存策略或观测模型前，必须先联网核对官方或一手资料，
   并在 task record 记录来源、采用结论和不采用边界。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、
@@ -525,6 +536,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   dirty/ahead/behind/push 边界，不自动 push，除非用户明确批准推送。
 - 规则/脚本/文档链路变更后，最终记录必须覆盖治理节点是否可见、门禁是否执行、
   是否发生去重、是否有跳过理由和是否存在明显性能问题。
+- 规则/脚本/manifest/README 改动后，必须运行或记录
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime manifest-report --check-manifest`
+  或等价 focused gate，证明 runtime registry、manifest 和 README 没有继续手工漂移。
 - 规则/脚本强制执行能力变更后，收口前必须运行：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
 - 通用 execution telemetry 记录入口：

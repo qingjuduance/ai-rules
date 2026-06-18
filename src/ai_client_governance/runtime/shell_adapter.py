@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ai_client_governance.records import tool_invocations
+from ai_client_governance.records import telemetry, tool_invocations
 from ai_client_governance.runtime.scope import classify_scope
 
 
@@ -115,6 +115,7 @@ def run_command(args: argparse.Namespace) -> int:
     child_env = os.environ.copy()
     child_env["AICG_SHELL_ADAPTER"] = "shell-adapter"
     child_env["AICG_EXECUTION_TELEMETRY_ENFORCEMENT"] = args.adapter_enforcement or "shell-adapter"
+    child_env.update(telemetry.env_for_child(trace_id=args.trace_id or child_env.get("CODEX_TRACE_ID", ""), parent_span_id=invocation_id))
     child_env["CODEX_TRACE_ID"] = args.trace_id or child_env.get("CODEX_TRACE_ID", invocation_id)
     child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
     child_env["PYTHONIOENCODING"] = "utf-8"

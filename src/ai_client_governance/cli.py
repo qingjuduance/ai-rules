@@ -10,7 +10,7 @@ from ai_client_governance.agents import comm as agent_comm
 from ai_client_governance.agents import group_status
 from ai_client_governance.audit import file_ownership, rule_tooling_audit
 from ai_client_governance.docs import doc_index, validate_doc_task
-from ai_client_governance.gates import architecture_guard, gate_pool, session_gate, task_gate
+from ai_client_governance.gates import architecture_guard, gate_pool, policy, session_gate, task_gate
 from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
@@ -41,6 +41,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "file-ownership": ("Audit .ai-client host-project tracked and ignored paths.", file_ownership.main),
     "framework-debt": ("Track framework-level design debt.", framework_debt.main),
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
+    "policy": ("Assess unified security and command policy.", policy.main),
     "lifecycle": ("Run lifecycle preflight/finalize/status.", lifecycle.main),
     "rule-audit": ("Audit rule-entry and README sections for tooling migration.", rule_tooling_audit.main),
     "runtime": ("Inspect agent governance runtime components.", runtime_registry.main),

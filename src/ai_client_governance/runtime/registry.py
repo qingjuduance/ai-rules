@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ai_client_governance.common import cli_arguments as common_cli_args
+
 
 COMPONENT_KINDS = {
     "input-filter",
@@ -1179,6 +1181,35 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "validation.gate.security-policy",
+            "cross-cutting-gate",
+            "validation",
+            615,
+            "Assess changed text files through the unified local security policy gate.",
+            events=("after-change", "completion-test", "final-output"),
+            task_types=("code-debug", "correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent"),
+            path_suffixes=TEXT_SUFFIXES,
+            requires_changed_paths=True,
+            gate_label="ai_client_governance.py policy assess",
+            gate_step="security-policy",
+            fail_policy="fail_closed",
+            requires_facts=("changed_paths", "policy_assessment"),
+            produces_facts=("security_policy_decision", "redaction_boundary", "command_policy_findings"),
+            effect="readonly",
+            condition=(
+                "Run after content changes and before final output for prompt injection, sensitive text, "
+                "command injection, supply-chain, and path-boundary risk. The plugin cannot intercept "
+                "host-native shell internally, so the enforceable surface is governed file/command paths "
+                "plus fail-closed diagnostics."
+            ),
+            dedupe_key="security-policy:changed-text-paths",
+            performance_budget="Read changed text files once with deterministic regex policy; no network or model call.",
+            metadata={
+                "policy_backend": "local-rule-based-now; future OPA/declarative backend can replace this gate",
+                "standards": ("OWASP LLM Top 10", "NIST AI RMF / GenAI Profile", "policy-as-code"),
+            },
+        ),
+        component(
             "validation.gate.validate-doc",
             "cross-cutting-gate",
             "validation",
@@ -1617,6 +1648,12 @@ def parse_args() -> argparse.Namespace:
 
     task_types = subparsers.add_parser("task-types", help="List registered task types.")
     task_types.add_argument("--format", choices=("text", "json"), default="text")
+
+    manifest_report = subparsers.add_parser("manifest-report", help="Compare runtime registry facts with manifest.json.")
+    common_cli_args.add_common_global_args(manifest_report, names=("root",))
+    manifest_report.add_argument("--manifest", default="manifest.json")
+    manifest_report.add_argument("--check-manifest", action="store_true", help="Exit non-zero when drift is found.")
+    manifest_report.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
 
 
@@ -1702,6 +1739,88 @@ def render_task_types(registry: ComponentRegistry, fmt: str) -> str:
     return "\n".join(lines)
 
 
+EXPECTED_RUNTIME_COMMAND_KEYS = {
+    "components",
+    "contractDescribe",
+    "taskRunPlan",
+    "taskRunRun",
+    "taskRunDiagnose",
+    "policyAssess",
+    "shellAdapterDiagnose",
+    "agentCommRegister",
+    "agentCommHeartbeat",
+    "telemetryReport",
+    "telemetryEffectiveness",
+    "telemetryEffectivenessSnapshot",
+    "taskQueueLifecycle",
+    "taskQueueTransition",
+    "lifecycleInputFilter",
+    "lifecyclePreflight",
+    "taskRecord",
+    "gatePool",
+    "completionTest",
+    "worktreeReconcile",
+    "worktreeCloseoutAll",
+    "hostCloseout",
+}
+
+
+def manifest_path(root: Path, value: str) -> Path:
+    path = Path(value or "manifest.json")
+    return path if path.is_absolute() else root / path
+
+
+def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root).resolve()
+    path = manifest_path(root, args.manifest)
+    manifest = json.loads(path.read_text(encoding="utf-8-sig"))
+    runtime = manifest.get("runtimeArchitecture") or {}
+    kinds = set(runtime.get("componentKinds") or [])
+    contract = set(runtime.get("componentContract") or [])
+    commands = set((runtime.get("runtimeCommands") or {}).keys())
+    actual_contract = set(ComponentDefinition.__dataclass_fields__)
+    contract_required = actual_contract - {"metadata"}
+    drifts: list[dict[str, Any]] = []
+
+    def add_drift(kind: str, missing: set[str], extra: set[str]) -> None:
+        if missing or extra:
+            drifts.append({"kind": kind, "missing": sorted(missing), "extra": sorted(extra)})
+
+    add_drift("componentKinds", COMPONENT_KINDS - kinds, kinds - COMPONENT_KINDS)
+    add_drift("componentContract", contract_required - contract, contract - actual_contract)
+    add_drift("runtimeCommands", EXPECTED_RUNTIME_COMMAND_KEYS - commands, commands - EXPECTED_RUNTIME_COMMAND_KEYS)
+    return {
+        "manifest": path.as_posix(),
+        "status": "pass" if not drifts else "fail",
+        "drift_count": len(drifts),
+        "drifts": drifts,
+        "actual": {
+            "componentKinds": sorted(COMPONENT_KINDS),
+            "componentContract": sorted(contract_required),
+            "runtimeCommands": sorted(EXPECTED_RUNTIME_COMMAND_KEYS),
+        },
+        "manifest_values": {
+            "componentKinds": sorted(kinds),
+            "componentContract": sorted(contract),
+            "runtimeCommands": sorted(commands),
+        },
+    }
+
+
+def render_manifest_report(report: dict[str, Any]) -> str:
+    lines = [
+        "AI Client Governance Runtime Manifest Report",
+        f"Manifest: {report['manifest']}",
+        f"Status: {report['status']}",
+        f"Drifts: {report['drift_count']}",
+    ]
+    for drift in report["drifts"]:
+        lines.append(f"- {drift['kind']}: missing={drift['missing']} extra={drift['extra']}")
+    if not report["drifts"]:
+        lines.append("- no manifest drift")
+    return "\n".join(lines)
+
+
 def main() -> int:
     args = parse_args()
     registry = default_registry()
@@ -1711,6 +1830,13 @@ def main() -> int:
     if args.command == "task-types":
         print(render_task_types(registry, args.format))
         return 0
+    if args.command == "manifest-report":
+        report = build_manifest_report(args)
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_manifest_report(report))
+        return 1 if args.check_manifest and report["drift_count"] else 0
     return 2
 
 
