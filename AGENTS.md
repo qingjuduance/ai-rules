@@ -151,6 +151,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `worktree-task create --repo ai-client-governance` 创建任务 worktree，目标路径放到宿主项目
   `.ai-client/project/.worktree/<task-slug>/`。只有固定脚本不可用时，才从
   ai-client-governance 仓库手工执行 `git worktree add` 并记录 break-glass 原因。
+- 用户没有明确说“合并 worktree / merge / 收口合并”时，修改完成后默认只在任务
+  worktree 上 commit，不能自动合并回 main 或执行 `worktree-task closeout-all --execute`。
+  用户没有明确说“push / 推送 / 提交并推送”时，也不能把 worktree commit 推到远端。
+  最终回复必须提示用户：worktree 已 commit、尚未合并、尚未 push，用户可以继续在该
+  worktree 上测试效果；后续只有收到明确合并或 push 指令后才进入对应链路。
 - task tracking 必须记录源仓库、worktree 路径、分支、基准提交和 `git status`。
 - coord session、lock 或队列记录不能代替 Git live state；开始修改、恢复任务和最终收口时，
   必须用 `git worktree list`、`worktree-task status --record-state` 或
@@ -451,6 +456,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 ## Git 边界
 
 - 用户只要求 commit 时默认只本地 commit，不 push。
+- 用户只要求修改、实现、提交或测试时，不等于批准合并 worktree 或 push；
+  merge/closeout/push 必须有单独明确指令。允许在任务 worktree 中 commit，并在最终
+  状态里报告分支、提交号、worktree 路径、“未合并”和“未 push”状态。
 - 只有用户明确说 push、推送或提交并推送时，才允许 `git push`。
 - `worktree-task closeout-all` 只能做本地收口：merge、移除 worktree、删本地任务分支、
   刷新状态和提交宿主 gitlink/state；它不能包含 `--push` 或执行 `git push`。
