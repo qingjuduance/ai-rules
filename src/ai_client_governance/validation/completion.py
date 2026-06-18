@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Plan completion tests from changed paths and task types."""
+"""Plan completion tests from changed paths and task types.
+
+The default profile is intentionally fast. Small governance code changes should
+prove the changed surface with compile/encoding/focused checks and reserve the
+full black-box selftest for release-like or high-risk passes. This keeps the
+gate auditable without making every narrow fix pay the full-suite cost.
+"""
 
 from __future__ import annotations
 
@@ -55,7 +61,7 @@ def touches_runtime(paths: list[str]) -> bool:
     return any(path.startswith(runtime_prefixes) for path in paths)
 
 
-def planned_checks(task_types: list[str], changed_paths: list[str]) -> list[PlannedCheck]:
+def planned_checks(task_types: list[str], changed_paths: list[str], *, profile: str = "fast") -> list[PlannedCheck]:
     suffixes = path_suffixes(changed_paths)
     checks: list[PlannedCheck] = []
 
@@ -73,7 +79,21 @@ def planned_checks(task_types: list[str], changed_paths: list[str]) -> list[Plan
     if "rules-script" in task_types or touches_runtime(changed_paths):
         add(PlannedCheck("runtime-components", "ai_client_governance.py runtime components --format json", "Runtime architecture changed."))
         add(PlannedCheck("gate-pool-dry-run", "ai_client_governance.py gate-pool --dry-run --final", "Registered gates should be visible and de-duplicated."))
-        add(PlannedCheck("selftest", "ai_client_governance.py selftest --root <target-project>", "Rules/script behavior changed."))
+        add(
+            PlannedCheck(
+                "focused-regression",
+                "run focused checks for the changed commands/modules",
+                "Fast profile requires changed-surface proof before escalating to the full suite.",
+            )
+        )
+        add(
+            PlannedCheck(
+                "selftest",
+                "ai_client_governance.py selftest --root <target-project>",
+                "Full black-box suite for broad, release-like, or high-risk rules/script changes.",
+                required=profile == "full",
+            )
+        )
     if "git" in task_types or any(path.startswith("src/ai_client_governance/worktree/") for path in changed_paths):
         add(PlannedCheck("worktree-reconcile", "ai_client_governance.py worktree-task reconcile --strict", "Git/worktree coordination changed or is in scope."))
         add(PlannedCheck("worktree-status", "ai_client_governance.py worktree-task status --record-state", "Live worktree state must be recorded in SQLite."))
@@ -131,6 +151,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-tracking", help="Task tracking file used for optional evidence scan.")
     parser.add_argument("--task-id", help="Structured task id used for optional SQLite evidence scan.")
     parser.add_argument("--db", help="Structured task-record SQLite path.")
+    parser.add_argument(
+        "--profile",
+        choices=("fast", "full"),
+        default="fast",
+        help="Validation profile. fast plans focused changed-surface checks; full requires the full selftest.",
+    )
     parser.add_argument("--require-evidence", action="store_true", help="Fail if required planned checks are not mentioned in task tracking.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
@@ -141,7 +167,7 @@ def main() -> int:
     root = Path(args.root).resolve()
     task_types = normalize_values(args.task_type)
     changed_paths = normalize_values(args.changed_path)
-    checks = planned_checks(task_types, changed_paths)
+    checks = planned_checks(task_types, changed_paths, profile=args.profile)
     tracking = Path(args.task_tracking) if args.task_tracking else None
     if tracking and not tracking.is_absolute():
         tracking = root / tracking
@@ -152,6 +178,7 @@ def main() -> int:
     payload = {
         "task_types": task_types,
         "task_id": args.task_id or "",
+        "profile": args.profile,
         "changed_paths": changed_paths,
         "planned_checks": [asdict(check) | {"evidence_found": hits.get(check.id, False)} for check in checks],
         "missing_evidence": missing,

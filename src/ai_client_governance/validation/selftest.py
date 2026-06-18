@@ -2294,6 +2294,74 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_completion_test_profiles(root: Path, run_dir: Path) -> TestResult:
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "completion-test",
+                "--task-type",
+                "rules-script",
+                "--changed-path",
+                "src/ai_client_governance/records/task_queue.py",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "completion-test",
+                "--profile",
+                "full",
+                "--task-type",
+                "rules-script",
+                "--changed-path",
+                "src/ai_client_governance/records/task_queue.py",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    try:
+        fast = json.loads(commands[0].stdout)
+        full = json.loads(commands[1].stdout)
+    except json.JSONDecodeError:
+        fast = {}
+        full = {}
+
+    def check_required(payload: dict[str, object], check_id: str) -> bool | None:
+        for check in payload.get("planned_checks", []):
+            if isinstance(check, dict) and check.get("id") == check_id:
+                return bool(check.get("required"))
+        return None
+
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and fast.get("profile") == "fast"
+        and full.get("profile") == "full"
+        and check_required(fast, "focused-regression") is True
+        and check_required(fast, "selftest") is False
+        and check_required(full, "selftest") is True
+    )
+    return TestResult(
+        name="completion-test-validation-profiles",
+        passed=passed,
+        summary=(
+            "completion-test fast profile requires focused checks while full profile requires selftest"
+            if passed
+            else "completion-test validation profiles did not plan expected checks"
+        ),
+        commands=commands,
+    )
+
+
 def test_sync_check_records_db_state(root: Path, run_dir: Path) -> TestResult:
     project = run_dir / "sync-check-db-project"
     embedded = project / ".ai-client" / "ai-client-governance"
@@ -2360,10 +2428,8 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
     write_text_lf(governance / "AGENTS.md", "# governance selftest\n")
     write_text_lf(
         governance / "scripts" / "ai_client_governance.py",
-        "import sys\n"
-        "if '--list' in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == 'sync-check'):\n"
-        "    print('selftest governance stub')\n"
-        "raise SystemExit(0)\n",
+        "import runpy\n"
+        f"runpy.run_path(r'{ai_client_governance_entrypoint()}', run_name='__main__')\n",
     )
     commands = [
         run_command(["git", "init", "-b", "main"], cwd=project, env_root=root),
@@ -2394,6 +2460,44 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         [
             run_command(["git", "add", "AGENTS.md"], cwd=worktree, env_root=root),
             run_command(["git", "commit", "-m", "update from task worktree"], cwd=worktree, env_root=root),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "task-queue",
+                    "enqueue",
+                    "--root",
+                    str(project),
+                    "--task-id",
+                    "TASK-SELFTEST-CLOSEOUT",
+                    "--title",
+                    "closeout queue selftest",
+                    "--message",
+                    "closeout queue selftest",
+                    "--task-tracking",
+                    ".ai-client/project/records/task-tracking/closeout-session.md",
+                    "--approval-label",
+                    "批准：selftest",
+                    "--status",
+                    "ready",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "task-queue",
+                    "start-next",
+                    "--root",
+                    str(project),
+                    "--task-id",
+                    "TASK-SELFTEST-CLOSEOUT",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
             run_command(
                 [
                     sys.executable,
@@ -2441,6 +2545,9 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
                     "--repo",
                     "ai-client-governance",
                     "--execute",
+                    "--complete-current-task",
+                    "--complete-summary",
+                    "selftest closeout queue complete",
                     "--format",
                     "json",
                 ],
@@ -2464,13 +2571,29 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
                 cwd=project,
                 env_root=root,
             ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "task-queue",
+                    "status",
+                    "--root",
+                    str(project),
+                    "--format",
+                    "json",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
         ]
     )
     closeout_payload: dict[str, object] = {}
     reconcile_payload: dict[str, object] = {}
+    queue_payload: dict[str, object] = {}
     try:
-        closeout_payload = json.loads(commands[-2].stdout)
-        reconcile_payload = json.loads(commands[-1].stdout)
+        closeout_payload = json.loads(commands[-3].stdout)
+        reconcile_payload = json.loads(commands[-2].stdout)
+        queue_payload = json.loads(commands[-1].stdout)
     except json.JSONDecodeError:
         pass
     coord_store = CoordStateStore(governance / ".git")
@@ -2483,10 +2606,25 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         item for item in execution
         if isinstance(item, dict) and item.get("action") == "close-coord-session"
     ]
+    queue_complete_steps = [
+        item for item in execution
+        if isinstance(item, dict) and item.get("action") == "complete-task-queue"
+    ]
+    queue_task = next(
+        (
+            item for item in queue_payload.get("all_tasks", [])
+            if isinstance(item, dict) and item.get("id") == "TASK-SELFTEST-CLOSEOUT"
+        ),
+        {},
+    )
     passed = (
         all(command.exit_code == 0 for command in commands)
         and bool(close_steps)
         and close_steps[-1].get("status") == "done"
+        and bool(queue_complete_steps)
+        and queue_complete_steps[-1].get("status") == "done"
+        and isinstance(queue_task, dict)
+        and queue_task.get("status") == "completed"
         and isinstance(session, dict)
         and session.get("status") == "closed_by_closeout"
         and coord_store.state_db.exists()
@@ -2503,9 +2641,9 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         name="worktree-closeout-all-closes-coord-session",
         passed=passed,
         summary=(
-            "closeout-all closes coord sessions and releases locks for removed task worktrees"
+            "closeout-all closes coord sessions, releases locks, and completes the active queue task"
             if passed
-            else "closeout-all left stale coord session or lock state after removing a task worktree"
+            else "closeout-all left stale coord session/lock state or did not complete the queue task"
         ),
         commands=commands,
     )
@@ -2569,6 +2707,7 @@ def main() -> int:
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_file_ownership_audit(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
+            test_completion_test_profiles(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),
         ]

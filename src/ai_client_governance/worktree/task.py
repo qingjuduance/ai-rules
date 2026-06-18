@@ -736,6 +736,54 @@ def add_closeout_step(
     )
 
 
+def add_closeout_completion_actions(plan: dict[str, Any], args: argparse.Namespace, project_root: Path) -> None:
+    """Record optional queue/task-record completion steps.
+
+    Queue completion is a lifecycle state transition and can be automated after
+    merge cleanup. A task-record final gate is only a check here: structured
+    records carry multi-table evidence, so closeout-all must not invent a final
+    payload just to make a task look done.
+    """
+    if not (args.complete_task_id or args.complete_current_task or args.task_record_final_gate):
+        return
+    if args.complete_task_id and args.complete_current_task:
+        plan["blockers"].append("use either --complete-task-id or --complete-current-task, not both")
+        return
+    script = governance_script_for_project(project_root)
+    if args.complete_task_id or args.complete_current_task:
+        command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
+        if args.complete_task_id:
+            command.extend(["--task-id", args.complete_task_id])
+        add_closeout_action(
+            plan,
+            action="complete-task-queue",
+            repo="self",
+            command=command,
+            reason="mark the queue task completed as part of closeout so final response does not require a separate state turn",
+        )
+    if args.task_record_final_gate:
+        task_id = args.complete_task_id or "<completed-queue-task>"
+        if not (args.complete_task_id or args.complete_current_task):
+            plan["blockers"].append("--task-record-final-gate requires --complete-task-id or --complete-current-task")
+            return
+        add_closeout_action(
+            plan,
+            action="task-record-final-gate",
+            repo="self",
+            command=[
+                sys.executable,
+                str(script),
+                "task-record",
+                "gate",
+                "--task-id",
+                task_id,
+                "--event",
+                "final",
+            ],
+            reason="verify structured task-record final facts after closeout without fabricating them",
+        )
+
+
 def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
     """Build a conservative plan for merging and cleaning task worktrees."""
     project_root = find_project_root(Path.cwd(), args.project_root)
@@ -945,6 +993,8 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
                 ],
             )
 
+    add_closeout_completion_actions(plan, args, project_root)
+
     if args.execute:
         current_cwd = Path.cwd().resolve()
         for task in plan.get("tasks", []):
@@ -1047,6 +1097,7 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
     project_root = Path(str(plan["project_root"]))
     tasks = [task for task in plan.get("tasks", []) if task.get("status") == "ready"]
     touched_repos: set[str] = set()
+    completed_queue_task_id = args.complete_task_id or ""
     try:
         for repo_name in closeout_repo_order(args.repo):
             repo_tasks = [task for task in tasks if task.get("repo") == repo_name]
@@ -1252,6 +1303,53 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                 action="host-post-closeout-diff-check",
                 repo="self",
             )
+        if args.complete_task_id or args.complete_current_task:
+            script = governance_script_for_project(project_root)
+            command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
+            if args.complete_task_id:
+                command.extend(["--task-id", args.complete_task_id])
+            completed = run_closeout_process(
+                plan,
+                command,
+                cwd=project_root,
+                action="complete-task-queue",
+                repo="self",
+                check=False,
+            )
+            if completed.returncode != 0:
+                return completed.returncode
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict):
+                completed_queue_task_id = str(payload.get("task_id") or completed_queue_task_id)
+        if args.task_record_final_gate:
+            if not completed_queue_task_id:
+                plan["blockers"].append("task-record final gate could not resolve completed queue task id")
+                return 1
+            script = governance_script_for_project(project_root)
+            completed = run_closeout_process(
+                plan,
+                [
+                    sys.executable,
+                    str(script),
+                    "task-record",
+                    "gate",
+                    "--task-id",
+                    completed_queue_task_id,
+                    "--event",
+                    "final",
+                    "--format",
+                    "json",
+                ],
+                cwd=project_root,
+                action="task-record-final-gate",
+                repo="self",
+                check=False,
+            )
+            if completed.returncode != 0:
+                return completed.returncode
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.output or "").strip()
         if detail:
@@ -2255,6 +2353,22 @@ def build_parser() -> argparse.ArgumentParser:
     closeout_all.add_argument("--target-ref", default="main", help="Target branch currently checked out in source repos.")
     closeout_all.add_argument("--plan", action="store_true", help="Print a dry-run plan. This is the default without --execute.")
     closeout_all.add_argument("--execute", action="store_true", help="Actually merge, clean, and commit host closeout without pushing.")
+    closeout_all.add_argument("--complete-task-id", help="Task queue id to mark completed after successful closeout.")
+    closeout_all.add_argument(
+        "--complete-current-task",
+        action="store_true",
+        help="Mark the single active queue task completed after successful closeout.",
+    )
+    closeout_all.add_argument(
+        "--complete-summary",
+        default="Local worktree closeout completed.",
+        help="Summary recorded when --complete-task-id or --complete-current-task completes the queue task.",
+    )
+    closeout_all.add_argument(
+        "--task-record-final-gate",
+        action="store_true",
+        help="Run task-record gate --event final for the completed task after closeout; does not mutate task-record facts.",
+    )
     closeout_all.add_argument(
         "--task-tracking",
         action="append",
