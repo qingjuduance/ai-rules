@@ -129,6 +129,8 @@ def compute_summary(status: dict[str, Any], groups: list[Any] | None = None) -> 
         "blocked_groups": 0,
         "active_agents": 0,
         "residual_agents": 0,
+        "reused_agents": 0,
+        "context_capsules": 0,
     }
     for group in groups:
         kind = status_kind(str(group.get("status", "")))
@@ -140,8 +142,17 @@ def compute_summary(status: dict[str, Any], groups: list[Any] | None = None) -> 
             counts["completed_groups"] += 1
         elif kind == "blocked":
             counts["blocked_groups"] += 1
-        counts["active_agents"] += len(group.get("active_agents", []) or [])
-        counts["residual_agents"] += len(group.get("residual_agents", []) or [])
+        active_agents = group.get("active_agents", []) or []
+        residual_agents = group.get("residual_agents", []) or []
+        counts["active_agents"] += len(active_agents)
+        counts["residual_agents"] += len(residual_agents)
+        for agent in active_agents:
+            if not isinstance(agent, dict):
+                continue
+            if str(agent.get("context_reuse", "")).lower() == "reuse":
+                counts["reused_agents"] += 1
+            if agent.get("context_capsule"):
+                counts["context_capsules"] += 1
     return counts
 
 
@@ -215,7 +226,8 @@ def render_text(status: dict[str, Any], stale_after: int, verbose: bool, show_al
         (
             "总组数: {total_groups} | 运行中: {running_groups} | "
             "待启动: {pending_groups} | 已完成: {completed_groups} | "
-            "活跃子AI: {active_agents} | 残留: {residual_agents}"
+            "活跃子AI: {active_agents} | 复用: {reused_agents} | "
+            "capsule: {context_capsules} | 残留: {residual_agents}"
         ).format(**summary),
         "",
     ]
@@ -312,4 +324,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

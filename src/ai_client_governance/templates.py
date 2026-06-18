@@ -203,8 +203,6 @@ TEMPLATES: dict[str, str] = {
 
 ## required_inputs
 
-## skip_inputs
-
 ## confirmed_facts
 
 ## validation
@@ -214,6 +212,26 @@ TEMPLATES: dict[str, str] = {
 ## write_scope
 
 ## lock_policy
+
+## context_reuse
+
+## reuse_key
+
+## retained_facts
+
+## skip_inputs
+
+## context_capsule
+
+## context_ttl
+
+## contamination_boundary
+
+## minimal_resume_inputs
+
+## token_budget
+
+## token_proxy_metrics
 
 ## token_usage_source
 """,

@@ -56,8 +56,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
+def run_command(command: list[str], cwd: Path, env_root: Path, unset_env: list[str] | None = None) -> CommandResult:
     artifact_root = Path(os.environ.get(SELFTEST_ARTIFACT_ENV, str(env_root))).resolve()
+    env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONPYCACHEPREFIX": str(artifact_root / PYTHON_PYCACHE_DIR),
+        PYCACHE_PREFIX_ENV: str(artifact_root / PYTHON_PYCACHE_DIR),
+        STATE_DB_ENV: str(artifact_root / "state" / "aicg-selftest.db"),
+        "AICG_DOC_INDEX_OUTPUT": str(artifact_root / "doc-index" / "graph.json"),
+    }
+    for name in unset_env or []:
+        env.pop(name, None)
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -66,15 +77,7 @@ def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={
-            **os.environ,
-            "PYTHONUTF8": "1",
-            "PYTHONIOENCODING": "utf-8",
-            "PYTHONPYCACHEPREFIX": str(artifact_root / PYTHON_PYCACHE_DIR),
-            PYCACHE_PREFIX_ENV: str(artifact_root / PYTHON_PYCACHE_DIR),
-            STATE_DB_ENV: str(artifact_root / "state" / "aicg-selftest.db"),
-            "AICG_DOC_INDEX_OUTPUT": str(artifact_root / "doc-index" / "graph.json"),
-        },
+        env=env,
     )
     return CommandResult(
         command=command,
@@ -1808,6 +1811,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
         ),
         run_command(
             [
@@ -1826,6 +1830,43 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "--root",
+                str(root),
+                "diagnose",
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "--require-task-run-tool-telemetry",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "--root",
+                str(root),
+                "diagnose",
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "--require-raw-shell-intercept",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
         ),
     ]
     component_output = commands[0].stdout + commands[0].stderr
@@ -1850,19 +1891,42 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     filtered_telemetry = (
         filtered_diagnose.get("telemetry", {}) if isinstance(filtered_diagnose.get("telemetry"), dict) else {}
     )
-    latest_event = telemetry.get("adapter", {}).get("latest_event", {}) if isinstance(telemetry.get("adapter"), dict) else {}
+    shell_adapter_telemetry = (
+        telemetry.get("shell_adapter_telemetry", {}) if isinstance(telemetry.get("shell_adapter_telemetry"), dict) else {}
+    )
+    task_run_tool_telemetry = (
+        telemetry.get("task_run_tool_telemetry", {})
+        if isinstance(telemetry.get("task_run_tool_telemetry"), dict)
+        else {}
+    )
+    raw_shell_auto_intercept = (
+        telemetry.get("shell_adapter_auto_intercept", {})
+        if isinstance(telemetry.get("shell_adapter_auto_intercept"), dict)
+        else {}
+    )
+    latest_event = (
+        task_run_tool_telemetry.get("latest_event", {})
+        if isinstance(task_run_tool_telemetry.get("latest_event"), dict)
+        else {}
+    )
     filtered_filters = (
         filtered_telemetry.get("filters", {}) if isinstance(filtered_telemetry.get("filters"), dict) else {}
     )
+    raw_shell_require_output = commands[6].stdout + commands[6].stderr
     passed = (
-        all(command.exit_code == 0 for command in commands)
+        all(command.exit_code == 0 for command in commands[:6])
+        and commands[6].exit_code != 0
         and "preflight.interceptor.task-run-dag" in component_output
         and int(first_summary.get("cache_misses", 0)) == 1
         and int(second_summary.get("cache_hits", 0)) == 1
         and "\"status\": \"cache-hit\"" in second_output
         and "\"telemetry_path\"" in first_output
         and int(telemetry.get("event_count", 0)) >= 4
-        and int(telemetry.get("adapter", {}).get("event_count", 0)) >= 2
+        and int(shell_adapter_telemetry.get("event_count", 0)) == 0
+        and int(task_run_tool_telemetry.get("event_count", 0)) >= 2
+        and not raw_shell_auto_intercept.get("installed")
+        and telemetry.get("raw_shell_gap")
+        and "raw-shell-auto-intercept" in raw_shell_require_output
         and "mixed" in telemetry.get("scope_kind_counts", {})
         and "ai-client-governance-common" in str(latest_event.get("scope_reason", ""))
         and not telemetry.get("duplicate_commands")
@@ -1876,7 +1940,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         name="task-run-dag-cache-diagnostics",
         passed=passed,
         summary=(
-            "task-run run writes telemetry events, reuses safe cache on the second validation, and diagnose reports clean telemetry health"
+            "task-run run writes task/tool telemetry, reuses safe cache, and diagnose keeps raw shell gap fail-closed"
             if passed
             else "task-run DAG/cache/diagnostics regression failed"
         ),
@@ -1931,6 +1995,47 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             ],
             cwd=root,
             env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "diagnose",
+                "--task-id",
+                "SHELL-ADAPTER-SELFTEST",
+                "--require-telemetry",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "diagnose",
+                "--task-id",
+                "SHELL-ADAPTER-SELFTEST",
+                "--require-fail-closed",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER"],
         ),
         run_command(
             [
@@ -1956,19 +2061,27 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
     except json.JSONDecodeError:
         pass
     scope_counts = diagnose.get("scope_kind_counts", {}) if isinstance(diagnose.get("scope_kind_counts"), dict) else {}
+    auto_intercept = diagnose.get("auto_intercept", {}) if isinstance(diagnose.get("auto_intercept"), dict) else {}
+    telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
+    fail_closed_output = commands[3].stdout + commands[3].stderr
     passed = (
-        all(command.exit_code == 0 for command in commands)
+        all(command.exit_code == 0 for command in [commands[0], commands[1], commands[2], commands[4]])
+        and commands[3].exit_code != 0
         and "\"status\": \"succeeded\"" in run_output
         and int(diagnose.get("event_count", 0)) >= 1
+        and int(telemetry.get("event_count", 0)) >= 1
+        and not auto_intercept.get("installed")
+        and not diagnose.get("fail_closed_ready")
+        and "shell-adapter-auto-intercept" in fail_closed_output
         and "ai-client-governance-common" in scope_counts
-        and "powershell-profile" in commands[2].stdout
-        and "execute_required" in commands[2].stdout
+        and "powershell-profile" in commands[4].stdout
+        and "execute_required" in commands[4].stdout
     )
     return TestResult(
         name="shell-adapter-scope-diagnostics",
         passed=passed,
         summary=(
-            "shell-adapter run writes scoped telemetry events and diagnose reports adapter evidence"
+            "shell-adapter run writes scoped telemetry while fail-closed diagnose still requires auto-intercept"
             if passed
             else "shell-adapter scoped telemetry diagnostics regression failed"
         ),

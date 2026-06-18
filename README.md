@@ -103,6 +103,9 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
 - **门禁池和执行链路**：`ai_client_governance.py gate-pool` 可以按同一 `trace_id` 编排多个
   门禁，`ai_client_governance.py telemetry` 负责统一记录/统计，`tool-invocations`
   作为命令适配器，`ai_client_governance.py tool-flow` 验证调用链路。
+- **Agent Context Reuse**：多智能体协作不写死小数量上限；总控先按任务树、写范围、验证风险
+  和上下文复用命中率决定继续复用、创建新 agent 或收束回主线程。每个 agent 都要有 reuse key、
+  Agent Brief、最小读取清单、context capsule 和 token usage 来源或代理指标，避免重复灌入完整历史。
 - **本地 token 用量统计**：`codex-token-usage` skill 读取本机 Codex session
   JSONL 的 `token_count` 事件，输出总量、净用量、缓存命中率、峰值日和最忙周。
 - **适合 GitHub 展示和复用**：README、manifest、规则事实源、adapter 目录和脚本
@@ -167,6 +170,10 @@ token usage 和外部 API 调用也扩展同一 span/event schema。`telemetry r
 top subjects、span kind、subject type、重复执行、失败率、duration p50/p95/max、cache hit/miss、
 scope 分布和 adapter enforcement 分布；`task-run diagnose` 读取同一 DB 和 worktree-coord 状态，报告重复终态命令、
 失败、cache hit/miss、活动锁、task-record/task-queue 口径差和裸 shell 自动拦截缺口。
+`task-run`、`gate-pool` 或 `tool-invocations` telemetry 只证明命令被 wrapper 补账，
+不会清空 raw shell gap；需要强制覆盖时运行
+`task-run diagnose --require-raw-shell-coverage` 或
+`shell-adapter diagnose --require-auto-intercept`。
 这不是替代宿主客户端，而是在命令进入宿主 shell 前提供强制过滤器、执行器和诊断层，
 减少多轮模型 HTTP 往返。
 诊断默认可看全局 telemetry，也可用 `--task-id`、`--trace-id`、`--since`、`--until`
@@ -822,6 +829,55 @@ python scripts\ai_client_governance.py worktree-coord session register `
   --metadata-file .ai-client\project\tmp\worktree-metadata.json
 ```
 
+## Agent Context Reuse
+
+智能体数量不再靠固定小上限控制。默认策略是先拆任务树，再按每个叶子的写范围、输入依赖、
+验证风险、预计上下文大小和可复用事实决定调度方式：
+
+- `reuse`：同一 task id、相同或相邻 scope、已有 agent heartbeat 新鲜、关键文件已读且未污染时，
+  复用原 agent，上下文通过 `send_input` 追加最小增量。
+- `spawn`：任务叶子独立、写范围不重叠、复用命中低或需要隔离推理时，创建新 agent。
+- `merge`：多个 agent 将触碰同一热点文件、锁冲突或验证成本高于并行收益时，由主线程或指定整合者收束。
+- `close`：agent 完成后关闭工具侧会话，并把可复用事实写成 context capsule。
+
+推荐调度顺序：
+
+1. 先把用户要求拆成任务树叶子，为每个叶子标注 `read_scope`、`write_scope`、验证责任和风险。
+2. 用 `TASK_ID:SCOPE:ROLE:CONTEXT_VERSION` 生成 reuse key，查找同任务同范围的 active agent、heartbeat 和 capsule。
+3. 命中同 task、相同或相邻 scope、heartbeat 新鲜、capsule 有结论/已读文件/验证证据且无污染边界时，优先 `reuse`。
+4. 独立叶子、不同写范围、需要隔离推理或复用命中低时才 `spawn`；写范围重叠或锁冲突时 `merge`。
+5. 每个完成 agent 必须 `close` 并留下 capsule；后续 agent 只读取 capsule、必要行号和新增输入。
+
+Agent Brief 必须包含 `context_reuse`、`reuse_key`、`retained_facts`、`skip_inputs`、
+`context_capsule`、`context_ttl`、`contamination_boundary`、`minimal_resume_inputs`、
+`token_budget`、`token_proxy_metrics` 和 `token_usage_source`。`skip_inputs` 用来明确哪些规则、
+文件或历史输出已经通过 capsule 覆盖，后续 agent 不再重复读取。没有真实 token 统计时，只能记录
+brief 行数、必读文件数、预计读取行数、跳过输入数和缓存命中率等代理指标，不能声称精确节省 token。
+
+context capsule 的最小结构：
+
+- `stable_facts`：可复用的结论和来源行号。
+- `files_read`：已读文件、行号范围和摘要。
+- `decisions`：reuse/spawn/merge/close 的理由。
+- `validation`：已跑命令、结果和失败路径。
+- `open_questions`：未决事项和下一次最小提示。
+- `contamination_boundary`：不得复用的输入、旧假设、敏感信息或失败推理。
+
+推荐通信记录：
+
+```powershell
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py agent-comm register GROUP AGENT `
+  --brief .ai-client/project/agents/briefs/<brief>.md `
+  --reuse-key TASK:SCOPE:ROLE `
+  --context-reuse reuse `
+  --context-capsule .ai-client/project/agents/briefs/<capsule>.md `
+  --context-ttl current-task `
+  --contamination-boundary clean-current-task `
+  --minimal-resume-input capsule:<capsule> `
+  --token-proxy-metric brief_lines=40 `
+  --token-usage-source codex-token-usage-or-proxy
+```
+
 ## 门禁池与调用链路
 
 `ai_client_governance.py gate-pool` 用来把固定门禁编排成一次可追踪运行。它不会自动
@@ -866,6 +922,7 @@ python scripts\ai_client_governance.py worktree-coord session register `
 `command-compression`。当前 execution telemetry 已经能记录 `gate-pool` 子门禁、`task-run`
 DAG、`shell-adapter`、`telemetry record` 和显式命令适配器 `tool-invocations run/record`，但宿主客户端裸 shell 调用
 不能被本仓库自动拦截，所以重要命令要通过 wrapper 执行或在 task record 说明例外。
+wrapped telemetry 是补偿证据，不等同于 shell-adapter auto-intercept。
 
 当前自我检测机制已经有效覆盖输入拆解、结构化 task record、worktree live state、gate-pool
 去重、工具 telemetry、completion-test、task-run DAG/cache/diagnose 和 selftest；这能发现

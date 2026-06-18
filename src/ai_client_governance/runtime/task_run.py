@@ -922,6 +922,45 @@ def filter_telemetry_events(
     return filtered
 
 
+SHELL_ADAPTER_MARKER_BEGIN = "# >>> ai-client-governance shell-adapter >>>"
+SHELL_ADAPTER_MARKER_END = "# <<< ai-client-governance shell-adapter <<<"
+
+
+def is_shell_adapter_event(event: dict[str, Any]) -> bool:
+    return (
+        event.get("event_type") == "shell-adapter"
+        or event.get("source") == "ai_client_governance.py shell-adapter"
+        or bool(event.get("shell_adapter"))
+    )
+
+
+def is_task_run_tool_event(event: dict[str, Any]) -> bool:
+    source = str(event.get("source") or "")
+    event_type = str(event.get("event_type") or "")
+    telemetry_sources = {
+        "ai_client_governance.py task-run",
+        "ai_client_governance.py tool-invocations",
+        "ai_client_governance.py gate-pool",
+        "ai_client_governance.py gate-pool run",
+        "ai_client_governance.py telemetry",
+        "ai_client_governance.py telemetry record",
+    }
+    return source in telemetry_sources or event_type in {"task-run", "gate-pool", "telemetry"}
+
+
+def profile_has_shell_adapter(profile_path: str) -> bool:
+    if not profile_path:
+        return False
+    profile = Path(profile_path).expanduser()
+    if not profile.exists():
+        return False
+    try:
+        text = profile.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return SHELL_ADAPTER_MARKER_BEGIN in text and SHELL_ADAPTER_MARKER_END in text
+
+
 def coord_summary(coord_root: Path) -> dict[str, Any]:
     script = resolve_governance_script(coord_root)
     if script is None:
@@ -973,6 +1012,7 @@ def build_diagnostics(
     results: list[ExecutionResult] | None = None,
     jsonl_artifact_dir: str | None = None,
     db: str | None = None,
+    profile_path: str = "",
     task_id: str = "",
     trace_id: str = "",
     since: str = "",
@@ -988,16 +1028,14 @@ def build_diagnostics(
         for command, count in Counter(commands).most_common()
         if command and count > 1
     ]
-    adapter_events = [
-        event
-        for event in terminal_events
-        if event.get("adapter_enforcement")
-        or event.get("event_type") == "shell-adapter"
-        or event.get("source") == "ai_client_governance.py shell-adapter"
-    ]
-    adapter_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
+    shell_adapter_events = [event for event in terminal_events if is_shell_adapter_event(event)]
+    task_run_tool_events = [event for event in terminal_events if is_task_run_tool_event(event)]
+    env_intercept_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
+    profile_intercept_installed = profile_has_shell_adapter(profile_path)
+    adapter_installed = env_intercept_installed or profile_intercept_installed
     scope_kind_counts = Counter(str(event.get("scope_kind") or "unknown") for event in terminal_events)
-    adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in adapter_events)
+    shell_adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in shell_adapter_events)
+    task_run_tool_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in task_run_tool_events)
     failures = [
         {
             "timestamp": event.get("timestamp", ""),
@@ -1023,16 +1061,33 @@ def build_diagnostics(
             "duplicate_commands": duplicates[:10],
             "failures": failures[-10:],
             "scope_kind_counts": dict(sorted(scope_kind_counts.items())),
+            "shell_adapter_auto_intercept": {
+                "installed": adapter_installed,
+                "env_installed": env_intercept_installed,
+                "profile_installed": profile_intercept_installed,
+                "profile_path": profile_path,
+                "fail_closed_ready": adapter_installed,
+            },
+            "shell_adapter_telemetry": {
+                "event_count": len(shell_adapter_events),
+                "enforcement_modes": dict(sorted(shell_adapter_modes.items())),
+                "latest_event": shell_adapter_events[-1] if shell_adapter_events else {},
+            },
+            "task_run_tool_telemetry": {
+                "event_count": len(task_run_tool_events),
+                "enforcement_modes": dict(sorted(task_run_tool_modes.items())),
+                "latest_event": task_run_tool_events[-1] if task_run_tool_events else {},
+            },
             "adapter": {
                 "installed": adapter_installed,
-                "event_count": len(adapter_events),
-                "enforcement_modes": dict(sorted(adapter_modes.items())),
-                "fail_closed_ready": adapter_installed or bool(adapter_events),
-                "latest_event": adapter_events[-1] if adapter_events else {},
+                "event_count": len(shell_adapter_events),
+                "enforcement_modes": dict(sorted(shell_adapter_modes.items())),
+                "fail_closed_ready": adapter_installed,
+                "latest_event": shell_adapter_events[-1] if shell_adapter_events else {},
             },
             "raw_shell_auto_intercepted": adapter_installed,
             "raw_shell_gap": ""
-            if adapter_installed or adapter_events
+            if adapter_installed
             else (
                 "The host client shell is not automatically intercepted by ai-client-governance; "
                 "important commands should run through shell-adapter, task-run, gate-pool, or the command adapter."
@@ -1173,8 +1228,12 @@ def format_run_text(report: TaskRunReport) -> str:
 def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
     telemetry_report = diagnostics.get("telemetry", {})
     filters = telemetry_report.get("filters", {})
+    auto_intercept = telemetry_report.get("shell_adapter_auto_intercept", {})
+    shell_adapter_telemetry = telemetry_report.get("shell_adapter_telemetry", {})
+    task_run_tool_telemetry = telemetry_report.get("task_run_tool_telemetry", {})
     coord = diagnostics.get("coordination", {})
     run = diagnostics.get("run", {})
+    requirements = diagnostics.get("requirements", {})
     lines = [
         "AI Client Governance Task Run Diagnostics",
         (
@@ -1190,7 +1249,10 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Telemetry duplicate commands: {len(telemetry_report.get('duplicate_commands', []))}",
         f"Telemetry failures: {len(telemetry_report.get('failures', []))}",
         f"Raw shell auto intercepted: {telemetry_report.get('raw_shell_auto_intercepted')}",
-        f"Shell adapter events: {telemetry_report.get('adapter', {}).get('event_count', 0)}",
+        f"Shell adapter auto intercept env: {auto_intercept.get('env_installed')}",
+        f"Shell adapter auto intercept profile: {auto_intercept.get('profile_installed')}",
+        f"Shell adapter telemetry events: {shell_adapter_telemetry.get('event_count', 0)}",
+        f"Task-run/tool telemetry events: {task_run_tool_telemetry.get('event_count', 0)}",
         f"Scope kinds: {json.dumps(telemetry_report.get('scope_kind_counts', {}), ensure_ascii=False, sort_keys=True)}",
         f"Coord available: {coord.get('available')}",
         f"Active locks: {coord.get('locks_active', 0)}",
@@ -1199,7 +1261,24 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Run cache hits: {run.get('cache_hits', 0)}",
         f"Run cache misses: {run.get('cache_misses', 0)}",
     ]
+    if requirements:
+        lines.append(f"Requirement failures: {', '.join(requirements.get('failed', [])) or '<none>'}")
     return "\n".join(lines)
+
+
+def diagnose_requirement_failures(args: argparse.Namespace, diagnostics: dict[str, Any]) -> list[str]:
+    telemetry_report = diagnostics.get("telemetry", {})
+    auto_intercept = telemetry_report.get("shell_adapter_auto_intercept", {})
+    shell_adapter_telemetry = telemetry_report.get("shell_adapter_telemetry", {})
+    task_run_tool_telemetry = telemetry_report.get("task_run_tool_telemetry", {})
+    failures: list[str] = []
+    if getattr(args, "require_raw_shell_intercept", False) and not auto_intercept.get("installed"):
+        failures.append("raw-shell-auto-intercept")
+    if getattr(args, "require_shell_adapter_telemetry", False) and not shell_adapter_telemetry.get("event_count"):
+        failures.append("shell-adapter-telemetry")
+    if getattr(args, "require_task_run_tool_telemetry", False) and not task_run_tool_telemetry.get("event_count"):
+        failures.append("task-run-tool-telemetry")
+    return failures
 
 
 def add_plan_args(parser: argparse.ArgumentParser) -> None:
@@ -1247,10 +1326,20 @@ def parse_args() -> argparse.Namespace:
     diagnose.add_argument("--coord-root", help="Repository root whose worktree-coord state should be diagnosed.")
     diagnose.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
     diagnose.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
+    diagnose.add_argument("--profile-path", default="", help="PowerShell profile file to inspect for shell-adapter auto-intercept markers.")
     diagnose.add_argument("--task-id", default="", help="Only diagnose telemetry events for one structured task id.")
     diagnose.add_argument("--trace-id", default="", help="Only diagnose telemetry events for one trace id.")
     diagnose.add_argument("--since", default="", help="Only include telemetry events at or after this ISO timestamp.")
     diagnose.add_argument("--until", default="", help="Only include telemetry events at or before this ISO timestamp.")
+    diagnose.add_argument(
+        "--require-raw-shell-intercept",
+        "--require-raw-shell-coverage",
+        dest="require_raw_shell_intercept",
+        action="store_true",
+        help="Exit non-zero unless shell-adapter env/profile auto-intercept is installed.",
+    )
+    diagnose.add_argument("--require-shell-adapter-telemetry", action="store_true", help="Exit non-zero unless shell-adapter telemetry evidence exists.")
+    diagnose.add_argument("--require-task-run-tool-telemetry", action="store_true", help="Exit non-zero unless task-run or tool-invocations telemetry evidence exists.")
     diagnose.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
 
@@ -1280,16 +1369,22 @@ def main() -> int:
             coord_root=coord_root,
             jsonl_artifact_dir=args.jsonl_artifact_dir,
             db=args.db,
+            profile_path=args.profile_path,
             task_id=args.task_id,
             trace_id=args.trace_id,
             since=args.since,
             until=args.until,
         )
+        requirement_failures = diagnose_requirement_failures(args, diagnostics)
+        diagnostics["requirements"] = {
+            "failed": requirement_failures,
+            "passed": not requirement_failures,
+        }
         if args.format == "json":
             print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
         else:
             print(format_diagnostics_text(diagnostics))
-        return 0
+        return 1 if requirement_failures else 0
     return 2
 
 

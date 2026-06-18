@@ -71,7 +71,7 @@
       ],
       "failPolicy": "fail_closed",
       "cachePolicy": "Cache is opt-in and limited to readonly/validation nodes; stateful, sequential, Git write, lock, task-record apply, git status, git diff, and git worktree list commands are no-cache.",
-      "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted."
+      "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted. Telemetry-wrapped commands are compensation evidence but do not clear raw_shell_gap; use task-run diagnose --require-raw-shell-coverage or shell-adapter diagnose --require-auto-intercept for fail-closed checks."
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -96,6 +96,10 @@
     {
       "id": "compress-local-commands-before-model-roundtrips",
       "summary": "Analyze new local command candidates for dedupe, batching, gate-pool aggregation, telemetry wrapping, or cache reuse before spending additional model turns."
+    },
+    {
+      "id": "reuse-agent-context-before-spawning",
+      "summary": "Choose reuse, spawn, merge, or close for sub-agents from task tree, write-scope locks, context capsules, and token budget evidence instead of a fixed small agent cap."
     },
     {
       "id": "changes-need-isolation-and-evidence",
@@ -132,6 +136,28 @@
       "LangGraph workflow engine unless using a self-built runner"
     ],
     "coreContext": "AgentExecutionContext",
+    "agentContextReusePolicy": {
+      "agentCountPolicy": "dynamic-by-task-tree-scope-locks-context-budget-and-validation-risk",
+      "reuseDecisions": [
+        "reuse",
+        "spawn",
+        "merge",
+        "close"
+      ],
+      "requiredEvidence": [
+        "reuse_key",
+        "agent brief",
+        "retained facts",
+        "skip inputs",
+        "context capsule",
+        "context TTL",
+        "minimal resume inputs",
+        "token budget or proxy metrics",
+        "heartbeat freshness",
+        "contamination boundary"
+      ],
+      "defaultRule": "reuse active same-task same-scope agents when fresh and uncontaminated; spawn for independent isolated leaves; merge when scopes overlap; close completed agents after writing a context capsule; never pass full history when a capsule and line-bounded reads are sufficient"
+    },
     "registryCommand": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
     "componentKinds": [
       "input-filter",
@@ -192,7 +218,7 @@
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; runtime components include a mutating-task fast path so small repository writes cannot skip the node; task-run plan provides the local dedupe and grouping event payload",
       "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes telemetry events to aicg.db by default, and stores trace JSON when requested",
       "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write telemetry events",
-      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, telemetry failures, cache hit/miss counts, coord locks/sessions, missing worktrees, task-record/task-queue alignment, current task presence, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope",
+      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, telemetry failures, cache hit/miss counts, coord locks/sessions, missing worktrees, task-record/task-queue alignment, current task presence, shell-adapter auto-intercept evidence, shell-adapter telemetry, telemetry-wrapped command evidence, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope; --require-raw-shell-coverage exits non-zero when auto-intercept is absent",
       "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; input-filter records can be applied before worktree creation, while final gates require worktree evidence for mutating tasks; task-id mode does not require Markdown task tracking",
       "entrypointResolutionPolicy": "runtime command generators and diagnostics resolve only embedded .ai-client/ai-client-governance or governance-repo-local scripts/ai_client_governance.py; host-root scripts/ai_client_governance.py is not a fallback",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, aicg.db worktree state, and related task tracking",
@@ -219,6 +245,8 @@
       "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run",
       "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose",
       "shellAdapterDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter diagnose",
+      "agentCommRegister": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py agent-comm register <group> <agent> --reuse-key <key> --context-reuse <decision> --context-capsule <path> --minimal-resume-input <item>",
+      "agentCommHeartbeat": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py agent-comm heartbeat <group> <agent> --reuse-key <key> --context-reuse <decision> --context-ttl <ttl>",
       "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter",
       "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRecord": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record",

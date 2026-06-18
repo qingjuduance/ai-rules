@@ -302,6 +302,16 @@ def command_register(args: argparse.Namespace) -> int:
         "registered_at": utc_now(),
         "updated_at": utc_now(),
         "token_usage_source": args.token_usage_source,
+        "reuse_key": args.reuse_key,
+        "context_reuse": args.context_reuse,
+        "context_capsule": args.context_capsule,
+        "context_budget": args.context_budget,
+        "context_ttl": args.context_ttl,
+        "contamination_boundary": args.contamination_boundary,
+        "minimal_resume_inputs": args.minimal_resume_input or [],
+        "token_proxy_metrics": args.token_proxy_metric or [],
+        "retained_facts": args.retained_fact or [],
+        "skip_inputs": args.skip_input or [],
     }
     if existing:
         existing.update(record)
@@ -445,6 +455,14 @@ def command_heartbeat(args: argparse.Namespace) -> int:
         "note": args.note,
         "current_files": args.file or [],
         "token_usage_source": args.token_usage_source,
+        "reuse_key": args.reuse_key,
+        "context_reuse": args.context_reuse,
+        "context_capsule": args.context_capsule,
+        "context_budget": args.context_budget,
+        "context_ttl": args.context_ttl,
+        "contamination_boundary": args.contamination_boundary,
+        "minimal_resume_inputs": args.minimal_resume_input or [],
+        "token_proxy_metrics": args.token_proxy_metric or [],
         "metadata": parse_json(args.metadata, {}),
     }
     write_json(root / "heartbeat.json", heartbeat)
@@ -824,6 +842,21 @@ def parse_args() -> argparse.Namespace:
     register.add_argument("--brief", default="", help="Agent brief path.")
     register.add_argument("--status", default="registered", help="Agent status.")
     register.add_argument("--token-usage-source", default="unavailable", help="Token usage source.")
+    register.add_argument("--reuse-key", default="", help="Stable key used to decide whether this agent context can be reused.")
+    register.add_argument(
+        "--context-reuse",
+        choices=("new", "reuse", "spawn", "merge", "close", "forbidden", "unknown"),
+        default="unknown",
+        help="Context reuse decision recorded for this agent.",
+    )
+    register.add_argument("--context-capsule", default="", help="Path to a reusable context capsule or summary artifact.")
+    register.add_argument("--context-budget", default="", help="Token or proxy budget for this agent context.")
+    register.add_argument("--context-ttl", default="", help="Freshness window for reusing this agent context.")
+    register.add_argument("--contamination-boundary", default="", help="Reason this context is safe or unsafe to reuse across scopes.")
+    register.add_argument("--minimal-resume-input", action="append", help="Minimal input needed to resume this agent without full history.")
+    register.add_argument("--token-proxy-metric", action="append", help="Proxy metric for token cost, such as brief lines or estimated read lines.")
+    register.add_argument("--retained-fact", action="append", help="Fact retained in this agent context.")
+    register.add_argument("--skip-input", action="append", help="Input already covered by a capsule and safe to skip.")
     register.set_defaults(func=command_register)
 
     send = sub.add_parser("send", help="Send a message to one recipient.")
@@ -865,6 +898,19 @@ def parse_args() -> argparse.Namespace:
     heartbeat.add_argument("--note", default="", help="Heartbeat note.")
     heartbeat.add_argument("--file", action="append", help="Current file path.")
     heartbeat.add_argument("--token-usage-source", default="unavailable", help="Token usage source.")
+    heartbeat.add_argument("--reuse-key", default="", help="Stable key used to decide whether this agent context can be reused.")
+    heartbeat.add_argument(
+        "--context-reuse",
+        choices=("new", "reuse", "spawn", "merge", "close", "forbidden", "unknown"),
+        default="unknown",
+        help="Context reuse decision recorded for this heartbeat.",
+    )
+    heartbeat.add_argument("--context-capsule", default="", help="Path to a reusable context capsule or summary artifact.")
+    heartbeat.add_argument("--context-budget", default="", help="Token or proxy budget for this agent context.")
+    heartbeat.add_argument("--context-ttl", default="", help="Freshness window for reusing this agent context.")
+    heartbeat.add_argument("--contamination-boundary", default="", help="Reason this context is safe or unsafe to reuse across scopes.")
+    heartbeat.add_argument("--minimal-resume-input", action="append", help="Minimal input needed to resume this agent without full history.")
+    heartbeat.add_argument("--token-proxy-metric", action="append", help="Proxy metric for token cost, such as brief lines or estimated read lines.")
     heartbeat.add_argument("--metadata", help="JSON object with extra metadata.")
     heartbeat.set_defaults(func=command_heartbeat)
 
@@ -926,4 +972,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

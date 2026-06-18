@@ -225,7 +225,7 @@ def diagnose(args: argparse.Namespace) -> int:
         for event in terminal
         if event.get("event_type") == "shell-adapter"
         or event.get("source") == "ai_client_governance.py shell-adapter"
-        or event.get("adapter_enforcement") == "shell-adapter"
+        or bool(event.get("shell_adapter"))
     ]
     profile_text = ""
     if args.profile_path:
@@ -233,16 +233,39 @@ def diagnose(args: argparse.Namespace) -> int:
         profile_text = profile.read_text(encoding="utf-8") if profile.exists() else ""
     profile_installed = ADAPTER_MARKER_BEGIN in profile_text and ADAPTER_MARKER_END in profile_text
     env_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
+    auto_intercept_ready = env_installed or profile_installed
     scope_counts = Counter(str(event.get("scope_kind") or "unknown") for event in adapter_events)
     payload = {
         "adapter": "ai_client_governance.py shell-adapter",
-        "installed": env_installed or profile_installed,
+        "installed": auto_intercept_ready,
         "env_installed": env_installed,
         "profile_installed": profile_installed,
         "event_count": len(adapter_events),
         "scope_kind_counts": dict(sorted(scope_counts.items())),
         "latest_event": adapter_events[-1] if adapter_events else {},
-        "fail_closed_ready": bool(adapter_events) or env_installed or profile_installed,
+        "auto_intercept": {
+            "installed": auto_intercept_ready,
+            "env_installed": env_installed,
+            "profile_installed": profile_installed,
+        },
+        "telemetry": {
+            "event_count": len(adapter_events),
+            "latest_event": adapter_events[-1] if adapter_events else {},
+        },
+        "fail_closed_ready": auto_intercept_ready,
+    }
+    requirement_failures: list[str] = []
+    if (
+        args.require_adapter
+        or args.require_fail_closed
+        or args.require_auto_intercept
+    ) and not payload["fail_closed_ready"]:
+        requirement_failures.append("shell-adapter-auto-intercept")
+    if args.require_telemetry and not adapter_events:
+        requirement_failures.append("shell-adapter-telemetry")
+    payload["requirements"] = {
+        "failed": requirement_failures,
+        "passed": not requirement_failures,
     }
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -252,7 +275,8 @@ def diagnose(args: argparse.Namespace) -> int:
         print(f"Adapter events: {payload['event_count']}")
         print(f"Fail-closed ready: {payload['fail_closed_ready']}")
         print(f"Scope kinds: {json.dumps(payload['scope_kind_counts'], ensure_ascii=False, sort_keys=True)}")
-    if args.require_adapter and not payload["fail_closed_ready"]:
+        print(f"Requirement failures: {', '.join(requirement_failures) or '<none>'}")
+    if requirement_failures:
         return 1
     return 0
 
@@ -297,7 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
     diag = sub.add_parser("diagnose", help="Report shell adapter installation and telemetry evidence.")
     diag.add_argument("--task-id", help="Only include adapter events for one structured task id.")
     diag.add_argument("--profile-path", help="PowerShell profile file to inspect for the adapter marker.")
-    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless adapter env/profile or telemetry evidence exists.")
+    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
+    diag.add_argument("--require-fail-closed", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
+    diag.add_argument("--require-auto-intercept", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
+    diag.add_argument("--require-telemetry", action="store_true", help="Exit non-zero unless shell-adapter telemetry evidence exists.")
     diag.add_argument("--format", choices=("text", "json"), default="text")
     diag.set_defaults(func=diagnose)
     return parser

@@ -244,7 +244,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `--jsonl-artifact-dir` 只允许作为隔离测试或一次性导出 artifact，不能作为默认机器事实源。
   `--no-telemetry` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动拦截，必须在
   task record 中记录原因或改用 `task-run`、`gate-pool`、`shell-adapter`、
-  `tool-invocations run` 补账。
+  `tool-invocations run` 补账；这类 telemetry-wrapped 命令只能证明命令被补账，
+  不能清空 raw shell gap。
 - 脚本生成的状态、telemetry、lock、coord session、trace、doc-index、pycache 或 selftest
   artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据；
   能入 DB 的状态不得退回默认 JSON/配置文件。确需贴近 Git common dir 的底层锁文件必须
@@ -266,7 +267,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `scope_kind`、`scope_reason` 和 task id。PowerShell 可用
   `shell-adapter profile-snippet` 或 `shell-adapter install-powershell --execute`
   安装 profile shim；profile shim 是显式适配器，不声称能拦截宿主客户端内部所有裸
-  shell。收口诊断必须区分 adapter evidence、telemetry-wrapped command 和 raw shell gap。
+  shell。收口诊断必须区分 shell-adapter auto-intercept、shell-adapter telemetry、
+  telemetry-wrapped command 和 raw shell gap；需要强制覆盖时使用
+  `task-run diagnose --require-raw-shell-coverage` 或
+  `shell-adapter diagnose --require-auto-intercept` fail closed。
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告 execution telemetry 失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
@@ -424,6 +428,22 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 ## 子 AI 协作
 
 - 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
+- 子 AI 数量不使用固定小上限；由任务树叶子数、写范围冲突矩阵、上下文复用收益、
+  验证风险和宿主客户端并发能力共同决定。能并行的独立叶子可以继续拆分；一旦写范围
+  重叠、复用命中低、验证成本超过收益或用户要求收束，必须收敛到更少 agent 或主线程整合。
+- 创建新子 AI 前必须先做 `agent-context-reuse` 判定：同一 task id、同一写范围或相邻只读
+  问题、已有 agent 保留关键上下文、heartbeat 新鲜且无污染风险时，优先复用该 agent 的上下文
+  继续 `send_input`；跨任务、跨安全边界、旧 UI 残留、事实来源不明或上下文已经污染时，不得复用，
+  只能创建新 agent 或回到主线程读取结构化事实源。
+- Agent Brief 或等价短输入包必须写明 `context_reuse`：复用/新建/关闭决策、reuse key、
+  已保留事实、必须跳过的重复输入、最小恢复读取清单、压缩摘要路径、token usage 来源或代理指标。
+- 子 AI 完成时必须产出可复用 context capsule：任务结论、已读文件、稳定事实、未决问题、
+  artifact、验证结果、不能复用的污染点和下一次最小提示；后续 agent 只读取 capsule 和必要行号，
+  不重复灌入完整历史。
+- reuse key 至少包含 `task_id`、scope、role 和上下文版本；复用 TTL 默认只在当前任务和新鲜
+  heartbeat 内有效，跨任务、跨安全边界、跨 worktree 或出现 prompt injection/敏感信息/错误事实污染时
+  必须失效。没有真实 token usage 时，必须记录 brief 行数、预计读取行数、必读文件数、跳过输入数等
+  代理指标，不能声称精确节省 token。
 - 创建子 AI 前必须准备 Agent Brief 或等价短输入包。
 - Agent Brief 模板由程序输出：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates agent-brief`。
