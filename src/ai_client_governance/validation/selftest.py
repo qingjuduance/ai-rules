@@ -20,7 +20,9 @@ from ai_client_governance.common.paths import (
     TOOL_INVOCATIONS_DIR,
     ai_client_governance_entrypoint,
 )
+from ai_client_governance.records import state_store
 from ai_client_governance.records import task_record as structured_task_record
+from ai_client_governance.worktree.coord import StateStore as CoordStateStore
 
 
 SELFTEST_ARTIFACT_ENV = "AICG_SELFTEST_ARTIFACT_ROOT"
@@ -300,7 +302,7 @@ def tracking_text(
 | ID | 用户要求 | 关联批准 | 当前状态 | 处理动作 | 实现证据 | 验证证据 | 最终回复覆盖口径 |
 |---|---|---|---|---|---|---|---|
 | REQ-SELFTEST-01 | 验证修改型任务必须记录 worktree evidence。 | `批准：selftest` | 已完成 | 生成临时 tracking 并运行 task-gate。 | Worktree 证据节。 | task-gate 退出码。 | 报告强制失败或通过。 |
-| REQ-SELFTEST-02 | 验证 task queue 按显式 task-id 完成任务。 | `批准：selftest` | 已完成 | 生成临时 queue 并运行 complete --task-id。 | 临时 task-queue.json。 | validate 退出码和任务状态。 | 报告旧任务 cancelled、新任务 completed。 |
+| REQ-SELFTEST-02 | 验证 task queue 按显式 task-id 完成任务。 | `批准：selftest` | 已完成 | 生成临时 DB queue 并运行 complete --task-id。 | 临时 aicg.db。 | validate 退出码和任务状态。 | 报告旧任务 cancelled、新任务 completed。 |
 """
     if user_requirement_variant == "prose":
         user_requirement_section = """## 用户要求追踪门禁
@@ -673,27 +675,27 @@ REQ-SELFTEST-01、REQ-SELFTEST-02 的门禁全面覆盖，失败路径 exit 1，
     )
 
 
-def queue_command(root: Path, queue_file: Path, *args: str) -> list[str]:
+def queue_command(root: Path, db: Path, *args: str) -> list[str]:
     return [
         sys.executable,
         str(ai_client_governance_entrypoint()),
         "task-queue",
         "--root",
         str(root),
-        "--queue-file",
-        str(queue_file),
+        "--db",
+        str(db),
         *args,
     ]
 
 
 def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
-    queue_file = run_dir / "task-queue.json"
+    db = run_dir / "aicg.db"
     trace_id = "trace-selftest-task-id"
     tracking = ".ai-client/project/records/task-tracking/selftest-task-id.md"
     commands_to_run = [
         queue_command(
             root,
-            queue_file,
+            db,
             "enqueue",
             "--task-id",
             "TQ-selftest-old",
@@ -710,11 +712,11 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--status",
             "ready",
         ),
-        queue_command(root, queue_file, "start-next", "--task-id", "TQ-selftest-old"),
-        queue_command(root, queue_file, "cancel", "--task-id", "TQ-selftest-old", "--reason", "selftest old"),
+        queue_command(root, db, "start-next", "--task-id", "TQ-selftest-old"),
+        queue_command(root, db, "cancel", "--task-id", "TQ-selftest-old", "--reason", "selftest old"),
         queue_command(
             root,
-            queue_file,
+            db,
             "enqueue",
             "--task-id",
             "TQ-selftest-new",
@@ -731,10 +733,10 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--status",
             "ready",
         ),
-        queue_command(root, queue_file, "start-next", "--task-id", "TQ-selftest-new"),
+        queue_command(root, db, "start-next", "--task-id", "TQ-selftest-new"),
         queue_command(
             root,
-            queue_file,
+            db,
             "complete",
             "--task-id",
             "TQ-selftest-new",
@@ -745,12 +747,23 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--summary",
             "selftest complete exact task id",
         ),
-        queue_command(root, queue_file, "validate", "--trace-id", trace_id, "--current-task-tracking", tracking),
+        queue_command(root, db, "validate", "--trace-id", trace_id, "--current-task-tracking", tracking),
+        queue_command(root, db, "--format", "json", "status"),
     ]
 
     commands = [run_command(command, cwd=root, env_root=root) for command in commands_to_run]
-    state = json.loads(queue_file.read_text(encoding="utf-8"))
-    statuses = {task["id"]: task["status"] for task in state.get("tasks", [])}
+    summary = json.loads(commands[-1].stdout)
+    tasks = []
+    for group in ("active", "ready", "waiting", "awaiting_approval", "candidates", "blocked"):
+        tasks.extend(summary.get(group, []))
+    statuses = {task["id"]: task["status"] for task in tasks}
+    statuses.update(
+        {
+            task["id"]: task["status"]
+            for task in summary.get("all_tasks", [])
+            if isinstance(task, dict) and task.get("id")
+        }
+    )
     passed = all(command.exit_code == 0 for command in commands) and statuses.get("TQ-selftest-old") == "cancelled" and statuses.get("TQ-selftest-new") == "completed"
     return TestResult(
         name="task-queue-task-id-priority",
@@ -1577,8 +1590,8 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT}\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.USER_CLAIM_VALIDATION_EVENT}\"" in input_filter_output
-        and "\"state_file\": null" in input_filter_output
-        and "\"scope_kind\": \"ai-client-governance-common\"" in input_filter_output
+        and "\"state_db\"" in input_filter_output
+        and "\"scope_kind\"" in input_filter_output
         and "scope-classification" in input_filter_output
         and "input-filter preflight facts present" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
@@ -1682,7 +1695,7 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
         and "preflight.interceptor.command-compression" in component_output
         and "preflight.interceptor.scope-classification" in component_output
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
-        and "\"scope_kind\": \"ai-client-governance-common\"" in plan_output
+        and "\"scope_kind\": \"native-project-assets\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
         and "local-command-compression" in plan_output
         and ".ai-client/ai-client-governance/scripts/ai_client_governance.py selftest" in host_plan_output
@@ -1703,7 +1716,10 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
 def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult:
     ledger_dir = run_dir / "task-run-ledger"
     cache_dir = run_dir / "task-run-cache"
-    validation_command = "python scripts/ai_client_governance.py validate-encoding --root . --paths README.md --strict"
+    validation_command = (
+        "python .ai-client/ai-client-governance/scripts/ai_client_governance.py "
+        "validate-encoding --root . --paths README.md --strict"
+    )
     run_base = [
         sys.executable,
         str(ai_client_governance_entrypoint()),
@@ -1815,7 +1831,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and "\"ledger_path\"" in first_output
         and int(ledger.get("event_count", 0)) >= 4
         and int(ledger.get("adapter", {}).get("event_count", 0)) >= 2
-        and "ai-client-governance-common" in ledger.get("scope_kind_counts", {})
+        and "mixed" in ledger.get("scope_kind_counts", {})
         and not ledger.get("duplicate_commands")
         and not ledger.get("failures")
         and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
@@ -1852,7 +1868,7 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
                 "--task-type",
                 "rules-script",
                 "--scope-path",
-                "src/ai_client_governance/runtime/shell_adapter.py",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
                 "--format",
                 "json",
                 "--",
@@ -1990,10 +2006,11 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     )
 
 
-def test_sync_check_writes_lf_state(root: Path, run_dir: Path) -> TestResult:
-    project = run_dir / "sync-check-lf-project"
+def test_sync_check_records_db_state(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "sync-check-db-project"
     embedded = project / ".ai-client" / "ai-client-governance"
-    state_path = project / ".ai-client" / "project" / "state" / "ai-client-governance-state.json"
+    legacy_state_path = project / ".ai-client" / "project" / "state" / "ai-client-governance-state.json"
+    state_db = project / ".ai-client" / "project" / "state" / "aicg.db"
     embedded.mkdir(parents=True, exist_ok=True)
     write_text_lf(embedded / "AGENTS.md", "# governance selftest\n")
     commands = [
@@ -2017,15 +2034,22 @@ def test_sync_check_writes_lf_state(root: Path, run_dir: Path) -> TestResult:
             env_root=root,
         ),
     ]
-    raw = state_path.read_bytes() if state_path.exists() else b""
-    passed = all(command.exit_code == 0 for command in commands) and raw.endswith(b"\n") and b"\r\n" not in raw
+    row = None
+    if state_db.exists():
+        con = state_store.connect(state_db, create=False)
+        row = state_store.read_state(con, state_type="sync-check", state_key="ai-client-governance")
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and row is not None
+        and not legacy_state_path.exists()
+    )
     return TestResult(
-        name="sync-check-writes-lf-state",
+        name="sync-check-records-db-state",
         passed=passed,
         summary=(
-            "sync-check writes ai-client-governance-state.json with LF endings"
+            "sync-check records state in aicg.db without generating legacy JSON"
             if passed
-            else "sync-check state file used platform newlines or was not written"
+            else "sync-check did not record DB state or generated legacy JSON"
         ),
         commands=commands,
     )
@@ -2159,8 +2183,9 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         reconcile_payload = json.loads(commands[-1].stdout)
     except json.JSONDecodeError:
         pass
-    state_path = governance / ".git" / "ai-client-runtime" / "worktree-coord" / "state.json"
-    coord_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    coord_store = CoordStateStore(governance / ".git")
+    coord_state = coord_store.read()
+    legacy_state_path = governance / ".git" / "ai-client-runtime" / "worktree-coord" / "state.json"
     session = coord_state.get("sessions", {}).get(session_id, {})
     locks = coord_state.get("locks", [])
     execution = closeout_payload.get("execution", []) if isinstance(closeout_payload, dict) else []
@@ -2174,6 +2199,8 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         and close_steps[-1].get("status") == "done"
         and isinstance(session, dict)
         and session.get("status") == "closed_by_closeout"
+        and coord_store.state_db.exists()
+        and not legacy_state_path.exists()
         and all(
             not (isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active")
             for lock in locks
@@ -2251,7 +2278,7 @@ def main() -> int:
             test_task_run_dag_cache_diagnostics(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
-            test_sync_check_writes_lf_state(root, run_dir),
+            test_sync_check_records_db_state(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),
         ]
     finally:

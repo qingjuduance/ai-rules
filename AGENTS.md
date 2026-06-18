@@ -25,13 +25,20 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   Copilot/Cursor/Cline/Windsurf/Continue/Roo/Aider 等入口只负责带路，不能各自
   演化出一套规则。真正事实源是通用治理契约、项目规则和 manifest。
 - **可确定约束优先组件化**：可重复、易遗漏、可检查或跨会话影响仓库状态的要求，
-  优先沉淀为 CLI、runtime component、gate、状态文件或 skill 能力；散文规则只保留
+  优先沉淀为 CLI、runtime component、gate、SQLite 状态表或 skill 能力；散文规则只保留
   不可绕过的边界和设计意图。
 - **先压缩本地确定步骤**：生成或运行新命令前，必须先判断能否去重、合并、并行、
   使用 gate-pool/task-run 或复用缓存，避免把确定性命令选择拆成多轮模型 HTTP 往返。
 - **结构化事实优先于 Markdown 反解析**：新任务先写 SQLite 事实源
   `.ai-client/project/state/aicg.db`，再按需导出 Markdown 报告；不能把机器门禁依赖
   建在散文和 Markdown 表格的事后反解析上。
+- **新设计替代旧活体路径**：更新状态架构时直接淘汰旧机器事实源，不保留默认兼容层、
+  默认 JSON 快照、fallback 读写或双轨收口。旧文件最多作为一次性 cleanup 输入，清理后
+  必须从脚本、gate、规则和收口路径中删除；已经废弃的运行态文件只允许由脚本 cleanup
+  或 discard，不再反向恢复为新状态事实。
+- **DB 是唯一活体治理状态**：任务队列、结构化任务记录、sync-check 结果、worktree
+  live-state、lifecycle 状态和可查询审计事实默认写入 `.ai-client/project/state/aicg.db`。
+  JSON/Markdown 只能通过显式导出命令输出给人读，不能作为后续机器逻辑的默认输入。
 - **修改必有隔离与证据**：修改型任务默认通过 worktree、结构化 task record、写锁、
   工具账本、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
 - **项目特化不污染通用层**：目标项目的业务、简历、学习路线、源码快照、目录结构、
@@ -84,10 +91,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   操作账本、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
 - worktree 创建、状态同步、收口检查和安全清理优先使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task ...`；当前 worktree
-  总览写入 `.ai-client/project/state/worktrees.json`，并在 task tracking 中引用。
-  该文件是可提交的审计快照，活体状态以重新运行 `worktree-task status --write-state`
-  为准；其中 HEAD 字段必须使用 `*_at_snapshot` 语义，避免提交快照本身推进 HEAD
-  后造成误判。
+  总览用 `worktree-task status --record-state` 写入 `.ai-client/project/state/aicg.db`。
+  活体状态仍以重新运行 Git live-state 命令为准；DB 中的 HEAD 字段必须使用
+  `*_at_snapshot` 语义，避免记录动作本身推进 HEAD 后造成误判。
 - 创建任务 worktree 前必须经过 `worktree-creation-policy` 节点：计划输出或写入前
   先声明使用 `worktree-task create`、sparse checkout 策略和源码快照目录处理方式。
   裸 `git worktree add` 只作为 break-glass 例外，必须在 task tracking 记录原因、
@@ -120,8 +126,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 用户回复 `批准：全部` 只批准当前请求批准消息列出的计划。
 - 用户消息先进入任务队列 `candidate` 或 `awaiting_approval`，不能直接成为 `active`。
 - 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
-- 队列事实源是 `.ai-client/project/state/task-queue.json`，入口是：
+- 队列事实源是 `.ai-client/project/state/aicg.db`，入口是：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue ...`。
+- `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件或 `--queue-file` fallback；
+  需要人读报告时使用 `status --format text/json` 输出到 stdout。
 - 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
 
 ## 强制 Worktree
@@ -137,7 +145,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   ai-client-governance 仓库手工执行 `git worktree add` 并记录 break-glass 原因。
 - task tracking 必须记录源仓库、worktree 路径、分支、基准提交和 `git status`。
 - coord session、lock 或队列记录不能代替 Git live state；开始修改、恢复任务和最终收口时，
-  必须用 `git worktree list`、`worktree-task status --write-state` 或
+  必须用 `git worktree list`、`worktree-task status --record-state` 或
   `worktree-task reconcile --strict` 复核 worktree 真实存在、分支正确且未被其它会话清理。
 - `worktree-task reconcile` 是 live-state 对账节点：以 Git worktree list 为事实源，
   对比 coord session、lock 和 queue。active session 指向不存在的 worktree 必须阻塞；
@@ -151,7 +159,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   确认没有残留任务 worktree；如因明确保留策略跳过该强门禁，必须记录原因和恢复方式。
 - 合并嵌入式 `ai-client-governance` 任务 worktree 后，不能只收口 `.ai-client/ai-client-governance/`
   子仓库。宿主仓库也必须作为同一条 closeout 链路处理：刷新
-  `.ai-client/project/state/worktrees.json`，检查并提交 `.ai-client/ai-client-governance` submodule
+  `.ai-client/project/state/aicg.db` 中的 worktree live-state，检查并提交 `.ai-client/ai-client-governance` submodule
   gitlink，更新对应 task tracking，并用
   `worktree-task host-closeout --repo ai-client-governance --require-task-tracking` 或
   `worktree-task finalize --require-host-closeout` 核对。最终完成态还要加
@@ -227,7 +235,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   拦截，必须在 task record 中记录原因或改用 `task-run`、`gate-pool`、
   `tool-invocations run` 补账。
 - 脚本生成的状态、账本、lock、coord session、trace、doc-index、pycache 或 selftest
-  artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据。
+  artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据；
+  能入 DB 的状态不得退回默认 JSON/配置文件。确需贴近 Git common dir 的底层锁文件必须
+  在 owner command 中声明原因、迁移边界和后续 DB 化任务。
   规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
   `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
   入口，不手工改运行态账本。

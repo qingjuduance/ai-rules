@@ -76,7 +76,7 @@ def planned_checks(task_types: list[str], changed_paths: list[str]) -> list[Plan
         add(PlannedCheck("selftest", "ai_client_governance.py selftest --root <target-project>", "Rules/script behavior changed."))
     if "git" in task_types or any(path.startswith("src/ai_client_governance/worktree/") for path in changed_paths):
         add(PlannedCheck("worktree-reconcile", "ai_client_governance.py worktree-task reconcile --strict", "Git/worktree coordination changed or is in scope."))
-        add(PlannedCheck("worktree-status", "ai_client_governance.py worktree-task status --write-state", "Live worktree state must be refreshed."))
+        add(PlannedCheck("worktree-status", "ai_client_governance.py worktree-task status --record-state", "Live worktree state must be recorded in SQLite."))
         add(
             PlannedCheck(
                 "host-closeout",

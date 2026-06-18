@@ -606,7 +606,7 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-
   --task-tracking .ai-client/project/records/task-tracking/2026-06-16-worktree固定脚本.md `
   --register-session
 
-python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task status --write-state
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task status --record-state
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task status --format json
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task close `
   --repo ai-client-governance `
@@ -622,7 +622,7 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task finalize `
   --require-merged `
   --require-no-task-worktrees `
-  --write-state
+  --record-state
 ```
 
 创建 `self` 仓库任务 worktree 时，脚本默认用 sparse-checkout 排除
@@ -644,13 +644,12 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py task-gate
   --only-worktree-creation-policy
 ```
 
-`status --write-state` 会生成或更新 `.ai-client/project/state/worktrees.json`，记录 self 和
-ai-client-governance 两个仓库下每个任务 worktree 的路径、分支、`head_at_snapshot`、dirty 状态和
-是否已合并到目标分支。这个文件是可提交的审计快照，不是免运行的实时数据库；提交快照
-本身会推进主仓库 HEAD，所以 HEAD 字段必须按 `*_at_snapshot` 理解。后续 AI 会话必须
-优先读取这个快照，再重新运行同一个脚本、`worktree-task reconcile --strict`
-或结合 `git worktree list --porcelain` 核对真实 Git 状态，最终回复前也必须做一次
-live status 校验。
+`status --record-state` 会把 self 和 ai-client-governance 两个仓库下每个任务
+worktree 的路径、分支、`head_at_snapshot`、dirty 状态和是否已合并到目标分支写入
+`.ai-client/project/state/aicg.db`。DB 是机器事实源；需要人读报告时使用
+`status --format text/json` 输出到 stdout。后续 AI 会话必须重新运行同一个脚本、
+`worktree-task reconcile --strict` 或结合 `git worktree list --porcelain` 核对真实
+Git 状态，最终回复前也必须做一次 live status 校验。
 
 `reconcile` 是比 `status` 更严格的 live-state 对账节点：它读取 Git live worktree、
 coord session、active locks 和 integration queue。如果 coord 仍认为某个 session
@@ -673,7 +672,7 @@ python scripts\ai_client_governance.py worktree-task reconcile --repo ai-client-
 DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再执行
 `worktree-task remove --execute` 删除任务 worktree 目录；如还要清理本地任务分支，
 先移除 worktree，再执行 `worktree-task cleanup-branch --execute`。最终用
-`worktree-task finalize --require-merged --require-no-task-worktrees --write-state`
+`worktree-task finalize --require-merged --require-no-task-worktrees --record-state`
 做 live gate；除非用户明确要求保留或存在取证/恢复需要，否则最终回复不能把残留
 `.ai-client/project/.worktree/<task-slug>/` 当成“已完成”。
 
@@ -687,10 +686,10 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-
 `closeout-all` 按 `ai-client-governance`、`self` 的依赖顺序处理，只接受 clean 且已提交的
 task worktree。它会阻塞 dirty worktree、锁定 worktree、缺失 target ref、源仓库未在
 target 分支、宿主仓库存在非收口路径脏改动或 merge conflict。
-执行模式会合并未合并分支、移除已收口 worktree、删除已合并本地任务分支，刷新
-`.ai-client/project/state/worktrees.json`，运行 CLI list、`git diff --check` 和
-sync-check，并只 stage/commit 宿主 gitlink、worktree state、sync state 和显式传入的
-`--task-tracking` 路径。移除任务 worktree 后，它会同步关闭该 worktree 对应的 active
+执行模式会合并未合并分支、移除已收口 worktree、删除已合并本地任务分支，把
+worktree live-state 和 sync-check 结果写入 `.ai-client/project/state/aicg.db`，运行
+CLI list、`git diff --check` 和 sync-check，并只 stage/commit 宿主 gitlink、DB state
+和显式传入的 `--task-tracking` 路径。移除任务 worktree 后，它会同步关闭该 worktree 对应的 active
 coord session 并释放 active lock，确保后续 `worktree-task reconcile --strict` 不需要
 再用 repair flag 清理 closeout 自己生成的残留。`closeout-all` 不执行 `git push`；push
 必须作为后续单独步骤，在用户明确批准远端边界后进入对应仓库执行。
@@ -702,13 +701,13 @@ owner/cleanup 链路，再运行脚本恢复；不要手工编辑 runtime ledger
 宿主仓库记录的 gitlink。这个收口不能只在 `.ai-client/ai-client-governance/` 子仓库内完成：
 
 ```powershell
-python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task status --write-state
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task status --record-state
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task host-closeout `
   --repo ai-client-governance `
   --task-slug <task-slug> `
   --task-tracking .ai-client\project\records\task-tracking\<tracking>.md `
   --require-task-tracking
-git add .ai-client\ai-client-governance .ai-client\project\state\worktrees.json `
+git add .ai-client\ai-client-governance .ai-client\project\state\aicg.db `
   .ai-client\project\records\task-tracking\<tracking>.md
 git commit -m "chore: record ai-client-governance worktree merge"
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task host-closeout `
@@ -720,7 +719,7 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-
 ```
 
 `host-closeout` 会比较宿主 index 中 `.ai-client/ai-client-governance` 的 gitlink、嵌入仓库当前 HEAD、
-`.ai-client/project/state/worktrees.json` 记录的 ai-client-governance HEAD，以及相关 task tracking
+`.ai-client/project/state/aicg.db` 记录的 ai-client-governance HEAD，以及相关 task tracking
 是否写到当前 HEAD。这样能防止“子仓库已合并，但宿主仓库还指向旧规则版本”的漏收口。
 
 手工 break-glass 示例：
@@ -740,7 +739,7 @@ task tracking 或最终验证记录必须写清源仓库路径、worktree 路径
 
 `ai_client_governance.py worktree-coord` 用来协调同一 Git 仓库的多个 worktree、会话和
 智能体组。它把运行态写入 `git rev-parse --git-common-dir` 下的
-`codex-runtime/worktree-coord/`，不进入提交。
+`ai-client-runtime/worktree-coord/state.db` SQLite 数据库，不进入提交。
 
 常用命令：
 
@@ -833,10 +832,10 @@ session、重复验证、失败账本和裸 shell 拦截缺口做成自动诊断
 默认命令和诊断脚本解析只认嵌入式 `.ai-client/ai-client-governance/` 或治理仓库自身入口；
 宿主根目录的 `scripts/ai_client_governance.py` 不作为旧路径 fallback。
 
-`gate-pool` 的 live-state 节点只运行只读 `worktree-task reconcile --strict`。需要刷新
-`.ai-client/project/state/worktrees.json` 时，必须显式运行
-`worktree-task status --write-state` 或 `worktree-task finalize --write-state`，并在收口提交
-中处理该快照；门禁池不能先写状态再要求 clean host。
+`gate-pool` 的 live-state 节点只运行只读 `worktree-task reconcile --strict`。需要记录
+worktree live-state 时，必须显式运行
+`worktree-task status --record-state` 或 `worktree-task finalize --record-state`，并在收口提交
+中处理 `.ai-client/project/state/aicg.db`；门禁池不能先写状态再要求 clean host。
 
 文档联动节点属于 post-change 链路。修改功能、脚本、规则、skill、manifest、
 README 或入口 adapter 后，必须判断是否影响用户可读文档、命令说明、索引、

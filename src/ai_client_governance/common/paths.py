@@ -117,7 +117,6 @@ LOGS_DIR = PROJECT_DIR / "logs"
 TOOL_INVOCATIONS_DIR = LOGS_DIR / "tool-invocations"
 
 STATE_DIR = PROJECT_DIR / "state"
-AI_CLIENT_GOVERNANCE_STATE_PATH = STATE_DIR / "ai-client-governance-state.json"
 STRUCTURED_DB_PATH = STATE_DIR / "aicg.db"
 
 CACHE_DIR = PROJECT_DIR / "cache"

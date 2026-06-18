@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -225,27 +225,102 @@ def is_stale_record(item: dict[str, Any], at_time: datetime | None = None) -> bo
 class StateStore:
     def __init__(self, common_dir: Path) -> None:
         self.runtime_dir = common_dir / "ai-client-runtime" / "worktree-coord"
-        self.state_file = self.runtime_dir / "state.json"
-        self.events_file = self.runtime_dir / "events.jsonl"
-        self.lock_file = self.runtime_dir / "state.lock"
+        self.state_db = self.runtime_dir / "state.db"
+        self.legacy_state_file = self.runtime_dir / "state.json"
+        self.legacy_events_file = self.runtime_dir / "events.jsonl"
+        self.legacy_lock_file = self.runtime_dir / "state.lock"
+        self._guard_con: sqlite3.Connection | None = None
 
     def ensure(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(self.state_db)
+        try:
+            con.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS coord_state (
+                    key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS coord_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            con.commit()
+        finally:
+            con.close()
+        self.discard_legacy_files()
+
+    def connect(self) -> sqlite3.Connection:
+        if self._guard_con is not None:
+            return self._guard_con
+        self.ensure()
+        con = sqlite3.connect(self.state_db)
+        con.row_factory = sqlite3.Row
+        return con
+
+    def default_state(self) -> dict[str, Any]:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+            "sessions": {},
+            "locks": [],
+            "queue": [],
+        }
+
+    def discard_legacy_files(self) -> None:
+        legacy_files = [
+            self.legacy_state_file,
+            self.legacy_events_file,
+            self.legacy_lock_file,
+        ]
+        existing = [path for path in legacy_files if path.exists()]
+        if not existing:
+            return
+        con = sqlite3.connect(self.state_db)
+        try:
+            now = utc_now()
+            con.execute(
+                """
+                INSERT INTO coord_events(event_type, payload_json, created_at)
+                VALUES ('legacy_json_discarded', ?, ?)
+                """,
+                (
+                    json.dumps(
+                        {"discarded": [str(path) for path in existing]},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+        for path in existing:
+            path.unlink(missing_ok=True)
 
     def read(self) -> dict[str, Any]:
         self.ensure()
-        if not self.state_file.exists():
-            return {
-                "schema_version": SCHEMA_VERSION,
-                "created_at": utc_now(),
-                "updated_at": utc_now(),
-                "sessions": {},
-                "locks": [],
-                "queue": [],
-            }
-        data = json.loads(self.state_file.read_text(encoding="utf-8"))
+        con = self.connect()
+        close = con is not self._guard_con
+        try:
+            row = con.execute("SELECT payload_json FROM coord_state WHERE key = 'default'").fetchone()
+        finally:
+            if close:
+                con.close()
+        if row is None:
+            return self.default_state()
+        data = json.loads(row[0])
         if not isinstance(data, dict):
-            raise SystemExit(f"{self.state_file} must contain a JSON object")
+            raise SystemExit(f"{self.state_db} coord_state.default must contain a JSON object")
         data.setdefault("schema_version", SCHEMA_VERSION)
         data.setdefault("sessions", {})
         data.setdefault("locks", [])
@@ -255,55 +330,79 @@ class StateStore:
     def write(self, state: dict[str, Any]) -> None:
         self.ensure()
         state["updated_at"] = utc_now()
-        temp = self.runtime_dir / f".state.{uuid.uuid4().hex}.tmp"
-        temp.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        temp.replace(self.state_file)
+        now = utc_now()
+        con = self.connect()
+        close = con is not self._guard_con
+        try:
+            existing = con.execute("SELECT created_at FROM coord_state WHERE key = 'default'").fetchone()
+            created_at = existing[0] if existing else state.get("created_at", now)
+            con.execute(
+                """
+                INSERT INTO coord_state(key, payload_json, created_at, updated_at)
+                VALUES ('default', ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                (json.dumps(state, ensure_ascii=False, sort_keys=True), created_at, now),
+            )
+            if close:
+                con.commit()
+        finally:
+            if close:
+                con.close()
 
     def append_event(self, event: dict[str, Any]) -> None:
         self.ensure()
         event = {"at": utc_now(), **event}
-        with self.events_file.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        con = self.connect()
+        close = con is not self._guard_con
+        try:
+            con.execute(
+                """
+                INSERT INTO coord_events(event_type, payload_json, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    str(event.get("event", "coord.event")),
+                    json.dumps(event, ensure_ascii=False, sort_keys=True),
+                    event["at"],
+                ),
+            )
+            if close:
+                con.commit()
+        finally:
+            if close:
+                con.close()
 
     def acquire_guard(self, timeout_seconds: int = 10, stale_seconds: int = 120) -> None:
         self.ensure()
         deadline = time.monotonic() + timeout_seconds
-        payload = json.dumps(
-            {"pid": os.getpid(), "created_at": utc_now()},
-            ensure_ascii=False,
-        )
         while True:
+            con = sqlite3.connect(self.state_db, timeout=0)
+            con.row_factory = sqlite3.Row
             try:
-                with self.lock_file.open("x", encoding="utf-8", newline="\n") as handle:
-                    handle.write(payload)
+                con.execute("BEGIN IMMEDIATE")
+                self._guard_con = con
                 return
-            except FileExistsError:
-                if self._guard_is_stale(stale_seconds):
-                    try:
-                        self.lock_file.unlink()
-                    except FileNotFoundError:
-                        pass
-                    continue
+            except sqlite3.OperationalError:
+                con.close()
                 if time.monotonic() >= deadline:
-                    raise SystemExit(f"timed out waiting for coordination lock: {self.lock_file}")
+                    raise SystemExit(f"timed out waiting for coordination lock: {self.state_db}")
                 time.sleep(0.1)
 
-    def _guard_is_stale(self, stale_seconds: int) -> bool:
+    def release_guard(self, *, commit: bool = True) -> None:
+        if self._guard_con is None:
+            return
+        con = self._guard_con
         try:
-            data = json.loads(self.lock_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        created = parse_time(str(data.get("created_at", "")))
-        return bool(created and created < utc_now_dt() - timedelta(seconds=stale_seconds))
-
-    def release_guard(self) -> None:
-        try:
-            self.lock_file.unlink()
-        except FileNotFoundError:
-            pass
+            if commit:
+                con.commit()
+            else:
+                con.rollback()
+        finally:
+            con.close()
+            self._guard_con = None
 
 
 class GuardedState:
@@ -315,7 +414,7 @@ class GuardedState:
         return self.store
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        self.store.release_guard()
+        self.store.release_guard(commit=exc_type is None)
 
 
 def active_sessions(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -934,4 +1033,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -3,9 +3,9 @@
 
 This script turns prose workflow rules into a small executable lifecycle for the
 human/AI coordination layer: input -> classification -> preflight -> execution
-evidence -> finalize. It is conservative by design. It writes only optional
-lifecycle state JSON under .ai-client/project/lifecycle/ and delegates heavy checks
-through the unified ai_client_governance.py CLI.
+evidence -> finalize. It is conservative by design: optional lifecycle state is
+recorded in aicg.db, and heavy checks are delegated through the unified
+ai_client_governance.py CLI.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, ai_client_governance_entrypoint
+from ai_client_governance.records import state_store
 from ai_client_governance.records import task_record as structured_task_record
 from ai_client_governance.runtime import AgentExecutionContext, default_registry, requires_approval_for, requires_tracking_for
 from ai_client_governance.runtime.registry import MUTATING_TASK_TYPES, NODE_EVENTS, TASK_TYPE_KEYWORDS
@@ -37,7 +38,6 @@ if hasattr(sys.stderr, "reconfigure"):
 
 SCHEMA_VERSION = 1
 DEFAULT_TRACE_PREFIX = "trace-lifecycle"
-STATE_DIR = Path(".ai-client") / "project" / "lifecycle"
 
 TEXT_EXTENSIONS = {
     ".css",
@@ -123,7 +123,7 @@ class LifecycleReport:
     warnings: list[Finding] = field(default_factory=list)
     notes: list[Finding] = field(default_factory=list)
     gate_commands: list[list[str]] = field(default_factory=list)
-    state_file: str | None = None
+    state_db: str | None = None
 
 
 def utc_now() -> str:
@@ -748,12 +748,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task-id", help="Structured task-record id for gated work.")
     parser.add_argument("--db", help="Structured task-record SQLite path.")
     parser.add_argument("--approved-label", help="Approval label, for example 批准：计划-生命周期状态机门禁.")
-    parser.add_argument("--trace-id", help="Trace id. Default: generated or inferred from state file.")
-    parser.add_argument("--state-file", help="Lifecycle state JSON path. Default: .ai-client/project/lifecycle/<trace>.json.")
+    parser.add_argument("--trace-id", help="Trace id. Default: generated.")
     parser.add_argument(
-        "--write-state",
+        "--record-state",
         action="store_true",
-        help="Persist lifecycle state. classify stays read-only unless this or --state-file is provided.",
+        help="Persist lifecycle state in .ai-client/project/state/aicg.db.",
     )
     parser.add_argument("--event", choices=sorted(NODE_EVENTS), help="Runtime event boundary. Default is inferred from lifecycle command.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
@@ -781,9 +780,10 @@ def parse_args() -> argparse.Namespace:
     finalize.add_argument("--run-gates", action="store_true", help="Run ai_client_governance.py gate-pool and doc-index checks.")
     finalize.add_argument("--dry-run", action="store_true", help="Print final gate commands without running them.")
 
-    status = subparsers.add_parser("status", help="Read a lifecycle state file.")
+    status = subparsers.add_parser("status", help="Read lifecycle state from SQLite.")
     status.add_argument("--root", default=".", help="Repository root. Default: current directory.")
-    status.add_argument("--state-file", required=True, help="Lifecycle state JSON path.")
+    status.add_argument("--trace-id", required=True, help="Trace id to read.")
+    status.add_argument("--db", help="SQLite database path. Default: <ai-client-project>/state/aicg.db.")
     status.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
     return parser.parse_args()
 
@@ -806,13 +806,6 @@ def lifecycle_event(args: argparse.Namespace) -> str:
     if command == "finalize":
         return "final-output"
     return ""
-
-
-def state_path_for(args: argparse.Namespace, root: Path, trace_id: str) -> Path:
-    if getattr(args, "state_file", None):
-        path = Path(args.state_file)
-        return path if path.is_absolute() else root / path
-    return root / STATE_DIR / f"{trace_id}.json"
 
 
 def validate_tracking(
@@ -998,16 +991,24 @@ def final_gate_commands(args: argparse.Namespace, report: LifecycleReport) -> li
 
 def save_state(report: LifecycleReport, args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
-    path = state_path_for(args, root, report.trace_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    db = state_store.db_path(root, getattr(args, "db", None))
+    con = state_store.connect(db)
     data = asdict(report)
-    data["state_file"] = rel_path(path, root)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    report.state_file = rel_path(path, root)
+    data["state_db"] = rel_path(db, root)
+    state_store.upsert_state(
+        con,
+        state_type="lifecycle",
+        state_key=report.trace_id,
+        payload=data,
+        source_command="ai_client_governance.py lifecycle",
+        summary=f"lifecycle {report.phase} {report.state}",
+        event_type="lifecycle.state_recorded",
+    )
+    report.state_db = rel_path(db, root)
 
 
 def should_save_state(args: argparse.Namespace) -> bool:
-    return bool(getattr(args, "write_state", False) or getattr(args, "state_file", None))
+    return bool(getattr(args, "record_state", False))
 
 
 def run_command(command: list[str], root: Path) -> tuple[int, str]:
@@ -1072,8 +1073,8 @@ def format_text(report: LifecycleReport) -> str:
     ]
     if c.changed_paths:
         lines.append(f"Changed paths: {', '.join(c.changed_paths)}")
-    if report.state_file:
-        lines.append(f"State file: {report.state_file}")
+    if report.state_db:
+        lines.append(f"State DB: {report.state_db}")
     if report.gate_commands:
         lines.append("Gate commands:")
         for command in report.gate_commands:
@@ -1087,10 +1088,13 @@ def format_text(report: LifecycleReport) -> str:
 
 def read_status(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    path = Path(args.state_file)
-    if not path.is_absolute():
-        path = root / path
-    data: Any = json.loads(path.read_text(encoding="utf-8"))
+    db = state_store.db_path(root, args.db)
+    con = state_store.connect(db, create=False)
+    row = state_store.read_state(con, state_type="lifecycle", state_key=args.trace_id)
+    if row is None:
+        print(f"lifecycle state not found: {args.trace_id}", file=sys.stderr)
+        return 1
+    data: Any = row["payload"]
     if args.format == "json":
         print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
     else:

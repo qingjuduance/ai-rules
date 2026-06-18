@@ -28,7 +28,6 @@ FORBIDDEN_CODEX_TOP = {
     "agent-comm",
     "agent-groups",
     "tool-invocations",
-    "ai-client-governance-state.json",
 }
 NATIVE_PROJECT_SKILLS_DIR = Path("skills")
 AI_CLIENT_GOVERNANCE_SKILLS_DIR = AI_CLIENT_ROOT / "ai-client-governance" / "skills"

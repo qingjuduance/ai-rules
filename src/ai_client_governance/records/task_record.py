@@ -122,6 +122,7 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    init_db(con)
     return con
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manage the project-local AI task workflow.
 
-The task state file is deliberately closer to a small workflow engine than a
+The task state stored in ``aicg.db`` is deliberately closer to a small workflow engine than a
 plain queue. User input first becomes a candidate or approval-waiting task.
 Only an approved, ready task can be started. This prevents the common failure
 mode where a new user message is treated as active work before scope and
@@ -13,9 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
-import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,14 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ai_client_governance.common.paths import STATE_DIR
+from ai_client_governance.records import state_store
 
 
-QUEUE_PATH = STATE_DIR / "task-queue.json"
-HEARTBEAT_PATH = STATE_DIR / "task-queue-heartbeat.json"
+QUEUE_STATE_TYPE = "task-queue"
+QUEUE_STATE_KEY = "default"
 SCHEMA_VERSION = 2
-LOCK_TIMEOUT_SECONDS = 10
-LOCK_STALE_SECONDS = 300
 
 INTAKE_STATUSES = {"candidate", "awaiting_approval"}
 READY_STATUSES = {"ready"}
@@ -86,7 +82,7 @@ def now_iso() -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage AI task workflow state.")
     parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
-    parser.add_argument("--queue-file", help="Override queue JSON path.")
+    parser.add_argument("--db", help="SQLite database path. Default: <ai-client-project>/state/aicg.db.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -145,7 +141,6 @@ def parse_args() -> argparse.Namespace:
     sub.add_parser("status", help="Print queue status.")
 
     heartbeat = sub.add_parser("heartbeat", help="Print a periodic queue heartbeat.")
-    heartbeat.add_argument("--write-snapshot", action="store_true")
 
     validate = sub.add_parser("validate", help="Validate queue invariants.")
     validate.add_argument("--current-task-tracking")
@@ -157,15 +152,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def queue_path(root: Path, override: str | None) -> Path:
-    if override:
-        path = Path(override)
-        return path if path.is_absolute() else root / path
-    return root / QUEUE_PATH
-
-
-def heartbeat_path(root: Path) -> Path:
-    return root / HEARTBEAT_PATH
+def queue_db_path(root: Path, override: str | None) -> Path:
+    return state_store.db_path(root, override)
 
 
 def default_state() -> dict[str, Any]:
@@ -186,9 +174,11 @@ def default_state() -> dict[str, Any]:
 
 
 def load_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
+    con = state_store.connect(path)
+    row = state_store.read_state(con, state_type=QUEUE_STATE_TYPE, state_key=QUEUE_STATE_KEY)
+    if row is None:
         return default_state()
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = row["payload"]
     data.setdefault("created_at", now_iso())
     data.setdefault("updated_at", now_iso())
     data.setdefault("policy", {})
@@ -236,44 +226,23 @@ def migrate_schema_v1_state(state: dict[str, Any]) -> None:
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
     state["updated_at"] = now_iso()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    con = state_store.connect(path)
+    state_store.upsert_state(
+        con,
+        state_type=QUEUE_STATE_TYPE,
+        state_key=QUEUE_STATE_KEY,
+        payload=state,
+        source_command="ai_client_governance.py task-queue",
+        summary="task queue workflow state",
+        event_type="task_queue.state_saved",
+    )
 
 
 @contextmanager
 def queue_lock(path: Path):
-    lock = path.with_name(f"{path.name}.lock")
-    start = time.monotonic()
-    handle = None
-    while handle is None:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            handle = lock.open("x", encoding="utf-8")
-            handle.write(f"pid={os.getpid()} acquired_at={now_iso()}\n")
-            handle.flush()
-        except FileExistsError:
-            try:
-                age = time.time() - lock.stat().st_mtime
-                if age > LOCK_STALE_SECONDS:
-                    lock.unlink()
-                    continue
-            except FileNotFoundError:
-                continue
-            if time.monotonic() - start > LOCK_TIMEOUT_SECONDS:
-                raise TimeoutError(f"task queue lock timed out: {lock}")
-            time.sleep(0.1)
-    try:
-        yield
-    finally:
-        if handle is not None:
-            handle.close()
-        try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+    # SQLite is the queue's live state coordinator; keep this context so the
+    # command dispatch remains simple while avoiding JSON lock sidecars.
+    yield
 
 
 def message_hash(message: str) -> str:
@@ -463,6 +432,7 @@ def queue_summary(state: dict[str, Any]) -> dict[str, Any]:
         "awaiting_approval": awaiting_approval,
         "candidates": candidates,
         "blocked": blocked,
+        "all_tasks": tasks,
         "next_task": ready[0] if ready else None,
         "updated_at": state.get("updated_at", ""),
     }
@@ -540,7 +510,7 @@ def command_enqueue(args: argparse.Namespace, root: Path, path: Path) -> int:
         state["tasks"].append(task)
         record_state_event(state, task, "candidate_created", "", task["status"], "task candidate recorded")
     save_state(path, state)
-    print(json.dumps({"task_id": task["id"], "status": task["status"], "queue_file": path.as_posix()}, ensure_ascii=False))
+    print(json.dumps({"task_id": task["id"], "status": task["status"], "state_db": path.as_posix()}, ensure_ascii=False))
     return 0
 
 
@@ -759,7 +729,7 @@ def command_validate(args: argparse.Namespace, root: Path, path: Path) -> int:
     state = load_state(path)
     errors, warnings, notes = validate_state(state, args)
     payload = {
-        "queue_file": path.as_posix(),
+        "state_db": path.as_posix(),
         "schema_version": state.get("schema_version"),
         "errors": [finding.message for finding in errors],
         "warnings": [finding.message for finding in warnings],
@@ -799,23 +769,16 @@ def command_heartbeat(args: argparse.Namespace, root: Path, path: Path) -> int:
     payload = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": now_iso(),
-        "queue_file": path.as_posix(),
+        "state_db": path.as_posix(),
         "summary": summary,
         "message": "Read this heartbeat before new work; start only ready tasks with explicit approval.",
     }
-    if args.write_snapshot:
-        output = heartbeat_path(root)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        payload["heartbeat_file"] = output.as_posix()
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print("AI Task Workflow Heartbeat")
         print(f"Generated: {payload['generated_at']}")
         print(render_summary(summary))
-        if payload.get("heartbeat_file"):
-            print(f"Heartbeat file: {payload['heartbeat_file']}")
     return 0
 
 
@@ -852,7 +815,7 @@ def dispatch_command(args: argparse.Namespace, root: Path, path: Path) -> int:
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
-    path = queue_path(root, args.queue_file)
+    path = queue_db_path(root, args.db)
     if args.command in MUTATING_COMMANDS:
         try:
             with queue_lock(path):

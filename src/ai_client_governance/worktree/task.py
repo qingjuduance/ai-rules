@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_client_governance.records import state_store
 from ai_client_governance.worktree.coord import GuardedState, StateStore, current_branch, current_head, detect_repo, git_text, safe_id
 
 DEFAULT_SELF_EXCLUDES = (".source-projects",)
@@ -359,13 +360,20 @@ def auto_task_tracking_paths(project_root: Path, task_slug: str | None) -> list[
     return [path.resolve() for path in matches if path.is_file()]
 
 
-def state_ai_client_governance_head(state_path: Path) -> str:
-    """Read the ai-client-governance main HEAD recorded in worktrees.json."""
-    if not state_path.exists():
-        return ""
-    try:
-        data = json.loads(state_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+def latest_worktree_state(project_root: Path) -> dict[str, Any] | None:
+    """Read the latest recorded worktree state from aicg.db."""
+    db = state_store.db_path(project_root)
+    if not db.exists():
+        return None
+    con = state_store.connect(db, create=False)
+    row = state_store.read_state(con, state_type="worktree-status", state_key="latest")
+    return row["payload"] if row else None
+
+
+def state_ai_client_governance_head(project_root: Path) -> str:
+    """Read the ai-client-governance main HEAD recorded in aicg.db."""
+    data = latest_worktree_state(project_root)
+    if not isinstance(data, dict):
         return ""
     ai_client_governance = data.get("ai-client-governance")
     if not isinstance(ai_client_governance, dict):
@@ -373,9 +381,9 @@ def state_ai_client_governance_head(state_path: Path) -> str:
     return str(ai_client_governance.get("main_head_full_at_snapshot", ""))
 
 
-def ai_client_governance_sync_state_path(project_root: Path) -> Path:
-    """Return the sync-check state file path in the host project."""
-    return project_root / ".ai-client" / "project" / "state" / "ai-client-governance-state.json"
+def worktree_state_db(project_root: Path) -> Path:
+    """Return the SQLite DB path used for live worktree state."""
+    return state_store.db_path(project_root)
 
 
 def project_relative_status_path(project_root: Path, path: Path) -> str:
@@ -413,13 +421,13 @@ def build_host_closeout_report(
             f"but embedded ai-client-governance HEAD is {embedded_head[:7]}"
         )
 
-    state_path = project_root / ".ai-client" / "project" / "state" / "worktrees.json"
-    state_head = state_ai_client_governance_head(state_path)
-    if not state_path.exists():
-        issues.append("host worktree state file is missing: .ai-client/project/state/worktrees.json")
+    state_db = worktree_state_db(project_root)
+    state_head = state_ai_client_governance_head(project_root)
+    if not state_db.exists():
+        issues.append("host worktree state DB is missing: .ai-client/project/state/aicg.db")
     elif state_head != embedded_head:
         issues.append(
-            "host worktree state is not refreshed for embedded ai-client-governance HEAD "
+            "host DB worktree state is not refreshed for embedded ai-client-governance HEAD "
             f"(state={state_head[:7] or '<missing>'}, head={embedded_head[:7]})"
         )
 
@@ -451,7 +459,7 @@ def build_host_closeout_report(
 
     relevant_paths = [
         embedded_path,
-        ".ai-client/project/state/worktrees.json",
+        ".ai-client/project/state/aicg.db",
         *[project_relative_status_path(project_root, path) for path in tracking_paths],
     ]
     relevant_status = status_for_paths(project_root, relevant_paths)
@@ -465,7 +473,7 @@ def build_host_closeout_report(
         "embedded_head_full": embedded_head,
         "embedded_head": embedded_head[:7],
         "host_gitlink": gitlink,
-        "state_file": project_relative_status_path(project_root, state_path),
+        "state_db": project_relative_status_path(project_root, state_db),
         "state_ai_client_governance_head_full": state_head,
         "state_ai_client_governance_head": state_head[:7] if state_head else "",
         "task_slug": task_slug or "",
@@ -474,8 +482,8 @@ def build_host_closeout_report(
         "host_status_short": host_status.splitlines() if host_status else [],
         "issues": issues,
         "next_actions": [
-            "run worktree-task status --write-state after merging ai-client-governance worktrees",
-            "commit the host .ai-client/ai-client-governance gitlink, .ai-client/project/state/worktrees.json, and task tracking record",
+            "run worktree-task status --record-state after merging ai-client-governance worktrees",
+            "commit the host .ai-client/ai-client-governance gitlink, .ai-client/project/state/aicg.db, and task tracking record",
             "rerun worktree-task host-closeout --require-clean-host before final reply",
         ],
     }
@@ -532,16 +540,16 @@ def build_status_snapshot(
         "project_root": str(project_root.resolve()),
         "core_principle": "一切流程化 + 可审计",
         "snapshot_semantics": {
-            "kind": "committed_audit_snapshot",
-            "live_state_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
-            "head_fields": "HEAD fields are observed at snapshot generation time. Committing this state file can advance the main repository HEAD, so rerun the live_state_command for live truth.",
-            "status_fields": "Status is calculated with the output state file ignored to avoid self-dirty snapshots.",
+            "kind": "db_live_state_record",
+            "live_state_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --record-state",
+            "head_fields": "HEAD fields are observed at record generation time. Rerun the live_state_command for live truth.",
+            "status_fields": "Status is calculated from Git live state and then recorded in aicg.db.",
         },
         "audit_policy": {
-            "worktree_state_source": ".ai-client/project/state/worktrees.json",
-            "script_entry": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state",
+            "worktree_state_source": ".ai-client/project/state/aicg.db",
+            "script_entry": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --record-state",
             "require_commit_before_merge": True,
-            "require_state_snapshot_before_closeout": True,
+            "require_db_state_record_before_closeout": True,
             "require_live_status_rerun_before_final_reply": True,
             "queue_before_merge_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task queue",
             "merge_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task merge --execute",
@@ -558,7 +566,7 @@ def build_status_snapshot(
             ),
             "embedded_ai_client_governance_merge_closeout": (
                 "After merging an ai-client-governance task worktree, the host repository must commit "
-                ".ai-client/ai-client-governance gitlink, .ai-client/project/state/worktrees.json, and related task tracking."
+                ".ai-client/ai-client-governance gitlink, .ai-client/project/state/aicg.db, and related task tracking."
             ),
         },
     }
@@ -633,8 +641,9 @@ def status_lines_outside(status_text: str, allowed_paths: set[str]) -> list[str]
 def closeout_owned_host_paths(project_root: Path, task_tracking: list[str] | None = None) -> set[str]:
     """Return host paths that closeout-all is allowed to stage and commit."""
     paths = {
+        ".ai-client/project/state/aicg.db",
+        ".ai-client/project/state/ai-client-governance-state.json",
         ".ai-client/project/state/worktrees.json",
-        project_relative_status_path(project_root, ai_client_governance_sync_state_path(project_root)),
     }
     if host_gitlink_record(project_root, ".ai-client/ai-client-governance").get("mode") == "160000":
         paths.add(".ai-client/ai-client-governance")
@@ -770,7 +779,13 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
                 f"{repo_name}: source repository must be checked out on {args.target_ref}; current branch is {repo_current_branch}"
             )
         if task_worktrees and repo_status:
-            plan["blockers"].append(f"{repo_name}: source repository worktree is dirty")
+            outside_repo_status = (
+                status_lines_outside(repo_status, allowed_host_paths)
+                if repo_name == "self"
+                else repo_status.splitlines()
+            )
+            if outside_repo_status:
+                plan["blockers"].append(f"{repo_name}: source repository worktree is dirty")
 
         for wt in task_worktrees:
             branch = str(wt.get("branch", ""))
@@ -875,10 +890,10 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
             plan["blockers"].append("host repository has dirty status outside closeout-owned paths: " + "; ".join(outside))
         add_closeout_action(
             plan,
-            action="write-state",
+            action="record-state",
             repo="self",
-            command=["python", "ai_client_governance.py", "worktree-task", "status", "--write-state"],
-            reason="refresh .ai-client/project/state/worktrees.json after merge cleanup",
+            command=["python", "ai_client_governance.py", "worktree-task", "status", "--record-state"],
+            reason="record latest worktree live state in aicg.db after merge cleanup",
         )
         add_closeout_action(
             plan,
@@ -1143,24 +1158,21 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                     repo="ai-client-governance",
                 )
 
-            state_path = status_state_path(project_root, "")
-            snapshot = build_status_snapshot(project_root, args.target_ref, {state_path.resolve()})
-            snapshot["state_file"] = display_path(state_path, project_root)
-            write_status_snapshot(state_path, snapshot)
+            snapshot = build_status_snapshot(project_root, args.target_ref)
+            db = record_status_snapshot(project_root, snapshot)
             add_closeout_step(
                 plan,
-                action="write-state",
+                action="record-state",
                 repo="self",
                 status="done",
-                command=[sys.executable, str(script), "worktree-task", "status", "--write-state"],
-                detail=display_path(state_path, project_root),
+                command=[sys.executable, str(script), "worktree-task", "status", "--record-state"],
+                detail=display_path(db, project_root),
             )
 
             stage_paths = sorted(closeout_owned_host_paths(project_root, args.task_tracking))
-            existing_stage_paths = [path for path in stage_paths if (project_root / path).exists()]
             run_closeout_process(
                 plan,
-                ["git", "add", "-f", "--", *existing_stage_paths],
+                ["git", "add", "-f", "--", *stage_paths],
                 cwd=project_root,
                 action="stage-host-closeout",
                 repo="self",
@@ -1231,16 +1243,14 @@ def coord_record_is_active(item: dict[str, Any]) -> bool:
 
 def read_coord_state(repo_path: Path) -> dict[str, Any]:
     """Read worktree-coord state for a Git repository."""
-    state_path = git_common_dir(repo_path) / "ai-client-runtime" / "worktree-coord" / "state.json"
-    if not state_path.exists():
-        return {"sessions": {}, "locks": [], "queue": [], "state_file": str(state_path)}
-    data = json.loads(state_path.read_text(encoding="utf-8"))
+    store = StateStore(git_common_dir(repo_path))
+    data = store.read()
     if not isinstance(data, dict):
-        raise SystemExit(f"coord state must contain a JSON object: {state_path}")
+        raise SystemExit(f"coord state must contain a JSON object: {store.state_db}")
     data.setdefault("sessions", {})
     data.setdefault("locks", [])
     data.setdefault("queue", [])
-    data["state_file"] = str(state_path)
+    data["state_db"] = str(store.state_db)
     return data
 
 
@@ -1347,7 +1357,7 @@ def reconcile_repo_live_state(
     return {
         "repo": repo_name,
         "repo_path": str(repo_path),
-        "coord_state_file": coord_state.get("state_file", ""),
+        "coord_state_db": coord_state.get("state_db", ""),
         "live_worktree_count": len(live_by_path),
         "task_worktree_count": len(task_paths),
         "active_session_count": len(active_sessions),
@@ -1442,25 +1452,20 @@ def close_coord_sessions_for_worktree(repo_path: Path, worktree_path: Path) -> t
     return closed, released
 
 
-def status_state_path(project_root: Path, output: str | None) -> Path:
-    """Resolve the status snapshot output path."""
-    path = Path(output).expanduser() if output else project_root / ".ai-client" / "project" / "state" / "worktrees.json"
-    if not path.is_absolute():
-        path = project_root / path
-    return path
-
-
-def write_status_snapshot(path: Path, snapshot: dict[str, Any]) -> Path:
-    """Write the status snapshot atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{safe_id('tmp')}.tmp")
-    temp.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
+def record_status_snapshot(project_root: Path, snapshot: dict[str, Any]) -> Path:
+    """Record the status snapshot in aicg.db."""
+    db = state_store.db_path(project_root)
+    con = state_store.connect(db)
+    state_store.upsert_state(
+        con,
+        state_type="worktree-status",
+        state_key="latest",
+        payload=snapshot,
+        source_command="ai_client_governance.py worktree-task status --record-state",
+        summary="latest Git worktree live-state snapshot",
+        event_type="worktree_status.recorded",
     )
-    temp.replace(path)
-    return path
+    return db
 
 
 def print_status_text(snapshot: dict[str, Any], task_slug: str | None) -> None:
@@ -1643,15 +1648,13 @@ def command_create(args: argparse.Namespace) -> int:
 def command_status(args: argparse.Namespace) -> int:
     """Show status of task worktrees."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
-    ignored_paths = {output.resolve()} if output else set()
-    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
+    snapshot = build_status_snapshot(repo_root, args.target_ref)
 
-    if output is not None:
-        snapshot["state_file"] = display_path(output, repo_root)
-        write_status_snapshot(output, snapshot)
+    if args.record_state:
+        db = record_status_snapshot(repo_root, snapshot)
+        snapshot["state_db"] = display_path(db, repo_root)
         if args.format != "json":
-            print(f"Wrote worktree state: {output}")
+            print(f"Recorded worktree state in DB: {db}")
 
     if args.format == "json":
         print(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1664,12 +1667,10 @@ def command_status(args: argparse.Namespace) -> int:
 def command_reconcile(args: argparse.Namespace) -> int:
     """Reconcile coord/session state against Git live worktree state."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
-    ignored_paths = {output.resolve()} if output else set()
-    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
-    if output is not None:
-        snapshot["state_file"] = display_path(output, repo_root)
-        write_status_snapshot(output, snapshot)
+    snapshot = build_status_snapshot(repo_root, args.target_ref)
+    if args.record_state:
+        db = record_status_snapshot(repo_root, snapshot)
+        snapshot["state_db"] = display_path(db, repo_root)
 
     repo_names = args.repo or ["self", "ai-client-governance"]
     reports: list[dict[str, Any]] = []
@@ -1693,14 +1694,14 @@ def command_reconcile(args: argparse.Namespace) -> int:
         "reports": reports,
         "errors": errors,
         "warnings": warnings,
-        "state_file": display_path(output, repo_root) if output else "",
+        "state_db": display_path(worktree_state_db(repo_root), repo_root) if args.record_state else "",
     }
 
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
-        if output is not None:
-            print(f"Wrote worktree state: {output}")
+        if args.record_state:
+            print(f"Recorded worktree state in DB: {worktree_state_db(repo_root)}")
         print("Worktree live-state reconcile:")
         for report in reports:
             print(
@@ -1904,7 +1905,7 @@ def command_merge(args: argparse.Namespace) -> int:
     )
     if args.repo == "ai-client-governance":
         print("Host repository closeout is also required for embedded ai-client-governance merges:")
-        print("  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --write-state")
+        print("  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --record-state")
         host_cmd = (
             "  python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout "
             f"--repo ai-client-governance --task-slug {args.task_slug} --require-task-tracking"
@@ -1912,7 +1913,7 @@ def command_merge(args: argparse.Namespace) -> int:
         for tracking_path in args.task_tracking or []:
             host_cmd += f" --task-tracking {tracking_path}"
         print(host_cmd)
-        print("  git add .ai-client/ai-client-governance .ai-client/project/state/worktrees.json <related task tracking>")
+        print("  git add .ai-client/ai-client-governance .ai-client/project/state/aicg.db <related task tracking>")
 
     if args.queue_item:
         mark_cmd = [
@@ -1940,12 +1941,10 @@ def command_merge(args: argparse.Namespace) -> int:
 def command_finalize(args: argparse.Namespace) -> int:
     """Run a live worktree status gate before final output or closeout."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
-    ignored_paths = {output.resolve()} if output else set()
-    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
-    if output is not None:
-        snapshot["state_file"] = display_path(output, repo_root)
-        write_status_snapshot(output, snapshot)
+    snapshot = build_status_snapshot(repo_root, args.target_ref)
+    if args.record_state:
+        db = record_status_snapshot(repo_root, snapshot)
+        snapshot["state_db"] = display_path(db, repo_root)
 
     issues: list[str] = []
     total_task_worktrees = 0
@@ -2178,10 +2177,9 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     status.add_argument(
-        "--write-state",
-        nargs="?",
-        const="",
-        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
+        "--record-state",
+        action="store_true",
+        help="Record full status snapshot in .ai-client/project/state/aicg.db.",
     )
 
     reconcile = subparsers.add_parser("reconcile", help="Reconcile coord/session metadata against Git live worktree state.")
@@ -2196,10 +2194,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     reconcile.add_argument(
-        "--write-state",
-        nargs="?",
-        const="",
-        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
+        "--record-state",
+        action="store_true",
+        help="Record full status snapshot in .ai-client/project/state/aicg.db.",
     )
 
     closeout_all = subparsers.add_parser(
@@ -2268,10 +2265,9 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--require-clean-host", action="store_true", help="Fail if the host repository has any dirty status entries.")
     finalize.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     finalize.add_argument(
-        "--write-state",
-        nargs="?",
-        const="",
-        help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
+        "--record-state",
+        action="store_true",
+        help="Record full status snapshot in .ai-client/project/state/aicg.db.",
     )
 
     host_closeout = subparsers.add_parser(
