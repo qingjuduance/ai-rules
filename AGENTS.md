@@ -240,6 +240,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run ...`
   执行确定性本地 DAG：只读/验证组可以并行，显式 `--cache` 时只缓存只读/验证节点；
   状态变更、Git 写入、锁、task-record apply 和未知副作用命令必须顺序执行且不缓存。
+- `task-run plan` 的每条命令必须暴露 capability 事实：`capability`、`risk_level`、
+  `side_effect`、`cache_eligible`、`parallel_eligible`、`approval_required` 和
+  `approval_reason`。这些字段先作为 command-compression event 和后续 policy engine
+  的稳定输入；启发式分类不得在同一节点里直接替代审批或安全策略阻断。
 - `task-run run`、`gate-pool`、`shell-adapter`、`telemetry record` 和命令适配器
   `tool-invocations run/record`
   默认把执行 span、事件、耗时、失败、cache、scope 和 trace 写入
@@ -288,9 +292,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report ...`；
   它读取 `execution_spans` 和 `execution_events`，统计 top operations、top subjects、span kind、
   subject type、重复执行、失败率、duration p50/p95/max、cache hit/miss、scope 分布和
-  adapter enforcement 分布。
+  adapter enforcement 分布，并输出 OpenTelemetry/W3C Trace Context 风格的 trace context
+  摘要。当前采用报告层映射，复用已有 `trace_id`、`span_id`、`parent_span_id`
+  和 attributes，不为了报告先迁移 SQLite schema。
+- 效果分析入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry effectiveness ...`；
+  它比较 before/after trace、task 或时间窗口，量化耗时、验证耗时、命令数、失败率、
+  cache hit/miss、重复 subject 和 gate/completion/final-gate 数量差异。
   新增模型 HTTP、子 AI、token usage 或外部 API 调用统计时，必须扩展同一 telemetry
   span/event 模型，不能再新增并行日志体系。
+- `task-queue lifecycle` 是 task queue 与 structured task record 的只读统一生命周期视图：
+  queue `completed` 与 task record `done` 都归一为 lifecycle `done`，并报告缺失、状态漂移
+  和 trace_id 漂移；它不隐式写回任一事实源。
 - 设计新的治理执行结构、缓存策略或观测模型前，必须先联网核对官方或一手资料，
   并在 task record 记录来源、采用结论和不采用边界。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、

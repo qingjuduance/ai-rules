@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ai_client_governance.common import cli_arguments as common_cli_args
 from ai_client_governance.records import state_store
 
 
@@ -35,6 +36,9 @@ SENSITIVE_QUERY_PARAM = re.compile(
 SENSITIVE_KEY = re.compile(
     r"(?i)(token|secret|password|passwd|api[-_]?key|access[-_]?key|credential|auth|authorization)"
 )
+TRACE_ID_HEX = re.compile(r"^[0-9a-f]{32}$")
+SPAN_ID_HEX = re.compile(r"^[0-9a-f]{16}$")
+TRACEPARENT_RE = re.compile(r"^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$")
 
 
 @dataclass(frozen=True)
@@ -650,6 +654,193 @@ def is_validation_span(span: dict[str, Any]) -> bool:
     )
 
 
+def valid_trace_id(value: str) -> bool:
+    text = str(value or "").lower()
+    return bool(TRACE_ID_HEX.fullmatch(text)) and text != "0" * 32
+
+
+def valid_span_id(value: str) -> bool:
+    text = str(value or "").lower()
+    return bool(SPAN_ID_HEX.fullmatch(text)) and text != "0" * 16
+
+
+def normalized_trace_id(value: str) -> tuple[str, bool]:
+    text = str(value or "").lower()
+    if valid_trace_id(text):
+        return text, False
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32] if text else "0" * 32
+    if digest == "0" * 32:
+        digest = "1" + digest[1:]
+    return digest, True
+
+
+def normalized_span_id(value: str) -> tuple[str, bool]:
+    text = str(value or "").lower()
+    if valid_span_id(text):
+        return text, False
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else "0" * 16
+    if digest == "0" * 16:
+        digest = "1" + digest[1:]
+    return digest, True
+
+
+def traceparent_for_span(span: dict[str, Any]) -> dict[str, Any]:
+    trace_id, trace_derived = normalized_trace_id(str(span.get("trace_id") or ""))
+    span_id, span_derived = normalized_span_id(str(span.get("span_id") or ""))
+    return {
+        "traceparent": f"00-{trace_id}-{span_id}-01",
+        "derived": trace_derived or span_derived,
+        "trace_id_derived": trace_derived,
+        "span_id_derived": span_derived,
+    }
+
+
+def trace_depth(span_id: str, parents: dict[str, str]) -> int:
+    depth = 0
+    seen: set[str] = set()
+    current = span_id
+    while parents.get(current):
+        parent = parents[current]
+        if parent in seen:
+            return depth
+        seen.add(parent)
+        depth += 1
+        current = parent
+    return depth
+
+
+def build_trace_context_summary(spans: list[dict[str, Any]], top: int) -> dict[str, Any]:
+    """Map local spans to OpenTelemetry/W3C Trace Context vocabulary.
+
+    The SQLite schema already has ``trace_id``, ``span_id`` and
+    ``parent_span_id`` plus arbitrary attributes. Reporting the standard shape
+    here gives gates/exporters a stable contract without a risky schema
+    migration. Non-W3C ids stay visible as non-standard; sample traceparents are
+    marked ``derived`` when generated from local ids.
+    """
+    by_trace: dict[str, list[dict[str, Any]]] = {}
+    for span in spans:
+        by_trace.setdefault(str(span.get("trace_id") or ""), []).append(span)
+    parents = {str(span.get("span_id") or ""): str(span.get("parent_span_id") or "") for span in spans}
+    roots = [span for span in spans if not span.get("parent_span_id")]
+    children = [span for span in spans if span.get("parent_span_id")]
+    known_ids = {str(span.get("span_id") or "") for span in spans}
+    orphans = [
+        span
+        for span in children
+        if str(span.get("parent_span_id") or "") not in known_ids
+    ]
+    attrs = [span.get("attributes") for span in spans if isinstance(span.get("attributes"), dict)]
+    traceparent_values = [
+        str(attr.get("traceparent") or "")
+        for attr in attrs
+        if attr.get("traceparent") not in (None, "")
+    ]
+    tracestate_values = [
+        str(attr.get("tracestate") or "")
+        for attr in attrs
+        if attr.get("tracestate") not in (None, "")
+    ]
+    sample_spans = spans[: max(0, top)]
+    return {
+        "standard": {
+            "trace_model": "OpenTelemetry trace/span context",
+            "propagation": "W3C traceparent/tracestate",
+            "schema_strategy": "report-layer mapping; SQLite schema unchanged",
+        },
+        "trace_count": len(by_trace),
+        "root_span_count": len(roots),
+        "child_span_count": len(children),
+        "orphan_span_count": len(orphans),
+        "max_depth": max([trace_depth(str(span.get("span_id") or ""), parents) for span in spans] or [0]),
+        "w3c_valid_trace_id_count": len([span for span in spans if valid_trace_id(str(span.get("trace_id") or ""))]),
+        "w3c_valid_span_id_count": len([span for span in spans if valid_span_id(str(span.get("span_id") or ""))]),
+        "traceparent_attribute_count": len(traceparent_values),
+        "valid_traceparent_attribute_count": len([item for item in traceparent_values if TRACEPARENT_RE.fullmatch(item)]),
+        "tracestate_attribute_count": len(tracestate_values),
+        "largest_traces": [
+            {"trace_id": trace_id, "span_count": len(items)}
+            for trace_id, items in sorted(by_trace.items(), key=lambda item: len(item[1]), reverse=True)[:top]
+        ],
+        "sample_traceparents": [
+            {
+                "span_id": span.get("span_id") or "",
+                **traceparent_for_span(span),
+            }
+            for span in sample_spans
+        ],
+    }
+
+
+def compact_metrics(spans: list[dict[str, Any]]) -> dict[str, Any]:
+    terminal = [span for span in spans if span.get("status") != "started"]
+    durations = [int(span["duration_ms"]) for span in terminal if span.get("duration_ms") is not None]
+    validation = [
+        int(span["duration_ms"])
+        for span in terminal
+        if span.get("duration_ms") is not None and is_validation_span(span)
+    ]
+    failures = [
+        span
+        for span in terminal
+        if span.get("status") == "failed" or (span.get("exit_code") not in (None, 0))
+    ]
+    subjects = Counter(str(span.get("subject_redacted") or "") for span in terminal if span.get("subject_redacted"))
+    return {
+        "span_count": len(spans),
+        "terminal_span_count": len(terminal),
+        "failed_count": len(failures),
+        "failure_rate": (len(failures) / len(terminal)) if terminal else 0,
+        "duration_ms": duration_stats(durations),
+        "validation_duration_ms": duration_stats(validation),
+        "cache": {
+            "hits": len([span for span in terminal if span.get("cached")]),
+            "misses": len([span for span in terminal if span.get("cache_key") and not span.get("cached")]),
+        },
+        "duplicate_subject_count": len([count for count in subjects.values() if count > 1]),
+        "command_count": len([span for span in terminal if span.get("span_kind") == "command"]),
+        "gate_pool_count": len([span for span in terminal if span.get("event_type") == "gate-pool" or span.get("name") == "gate-pool"]),
+        "completion_test_count": len([span for span in terminal if "completion-test" in str(span.get("name") or "")]),
+        "final_gate_count": len([span for span in terminal if span.get("final_gate")]),
+    }
+
+
+def diff_number(before: int | float | None, after: int | float | None) -> dict[str, Any]:
+    if before is None or after is None:
+        return {"before": before, "after": after, "delta": None, "delta_percent": None}
+    delta = after - before
+    return {
+        "before": before,
+        "after": after,
+        "delta": delta,
+        "delta_percent": round((delta / before) * 100, 2) if before else None,
+    }
+
+
+def effectiveness_metric_diffs(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "duration_sum_ms": diff_number(baseline["duration_ms"]["sum"], candidate["duration_ms"]["sum"]),
+        "duration_p95_ms": diff_number(baseline["duration_ms"]["p95"], candidate["duration_ms"]["p95"]),
+        "validation_duration_sum_ms": diff_number(
+            baseline["validation_duration_ms"]["sum"], candidate["validation_duration_ms"]["sum"]
+        ),
+        "span_count": diff_number(baseline["span_count"], candidate["span_count"]),
+        "command_count": diff_number(baseline["command_count"], candidate["command_count"]),
+        "failed_count": diff_number(baseline["failed_count"], candidate["failed_count"]),
+        "failure_rate": diff_number(baseline["failure_rate"], candidate["failure_rate"]),
+        "cache_hits": diff_number(baseline["cache"]["hits"], candidate["cache"]["hits"]),
+        "cache_misses": diff_number(baseline["cache"]["misses"], candidate["cache"]["misses"]),
+        "duplicate_subject_count": diff_number(
+            baseline["duplicate_subject_count"], candidate["duplicate_subject_count"]
+        ),
+        "gate_pool_count": diff_number(baseline["gate_pool_count"], candidate["gate_pool_count"]),
+        "completion_test_count": diff_number(
+            baseline["completion_test_count"], candidate["completion_test_count"]
+        ),
+        "final_gate_count": diff_number(baseline["final_gate_count"], candidate["final_gate_count"]),
+    }
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
     spans = span_rows(
@@ -731,7 +922,63 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "adapter_enforcement_counts": dict(
             Counter(str(span.get("adapter_enforcement") or "none") for span in terminal)
         ),
+        "trace_context": build_trace_context_summary(spans, args.top),
         "latest_spans": terminal[-args.top :],
+    }
+
+
+def window_filters(prefix: str, args: argparse.Namespace) -> dict[str, str]:
+    return {
+        "trace_id": getattr(args, f"{prefix}_trace_id") or "",
+        "since": getattr(args, f"{prefix}_since") or "",
+        "until": getattr(args, f"{prefix}_until") or "",
+    }
+
+
+def build_effectiveness_report(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root).resolve()
+    baseline_filters = window_filters("baseline", args)
+    candidate_filters = window_filters("candidate", args)
+    baseline_spans = span_rows(
+        root,
+        db=args.db,
+        task_id=args.baseline_task_id or args.task_id or "",
+        trace_id=baseline_filters["trace_id"],
+        since=baseline_filters["since"],
+        until=baseline_filters["until"],
+    )
+    candidate_spans = span_rows(
+        root,
+        db=args.db,
+        task_id=args.candidate_task_id or args.task_id or "",
+        trace_id=candidate_filters["trace_id"],
+        since=candidate_filters["since"],
+        until=candidate_filters["until"],
+    )
+    baseline = compact_metrics(baseline_spans)
+    candidate = compact_metrics(candidate_spans)
+    return {
+        "db": str(db_path(root, args.db)),
+        "task_id": args.task_id or "",
+        "baseline": {
+            "filters": {
+                "task_id": args.baseline_task_id or args.task_id or "",
+                **baseline_filters,
+            },
+            "metrics": baseline,
+        },
+        "candidate": {
+            "filters": {
+                "task_id": args.candidate_task_id or args.task_id or "",
+                **candidate_filters,
+            },
+            "metrics": candidate,
+        },
+        "diff": effectiveness_metric_diffs(baseline, candidate),
+        "trace_context": {
+            "baseline": build_trace_context_summary(baseline_spans, args.top),
+            "candidate": build_trace_context_summary(candidate_spans, args.top),
+        },
     }
 
 
@@ -788,6 +1035,23 @@ def format_text(report: dict[str, Any]) -> str:
     lines.append(
         f"Adapter enforcement: {json.dumps(report['adapter_enforcement_counts'], ensure_ascii=False, sort_keys=True)}"
     )
+    trace = report["trace_context"]
+    lines.extend(
+        [
+            "",
+            "Trace context:",
+            (
+                f"  traces={trace['trace_count']} roots={trace['root_span_count']} "
+                f"children={trace['child_span_count']} orphans={trace['orphan_span_count']} "
+                f"max_depth={trace['max_depth']}"
+            ),
+            (
+                f"  w3c trace ids={trace['w3c_valid_trace_id_count']} "
+                f"span ids={trace['w3c_valid_span_id_count']} "
+                f"traceparent attrs={trace['valid_traceparent_attribute_count']}/{trace['traceparent_attribute_count']}"
+            ),
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -834,6 +1098,51 @@ def format_markdown(report: dict[str, Any]) -> str:
             lines.append(f"| {row['count']} | `{row['subject']}` |")
     else:
         lines.append("None.")
+    trace = report["trace_context"]
+    lines.extend(
+        [
+            "",
+            "## Trace Context",
+            "",
+            f"- Standard: {trace['standard']['trace_model']}; {trace['standard']['propagation']}",
+            f"- Traces: {trace['trace_count']} roots={trace['root_span_count']} children={trace['child_span_count']} orphans={trace['orphan_span_count']}",
+            f"- W3C valid ids: trace={trace['w3c_valid_trace_id_count']} span={trace['w3c_valid_span_id_count']}",
+            f"- Traceparent attributes: {trace['valid_traceparent_attribute_count']}/{trace['traceparent_attribute_count']}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_effectiveness_text(report: dict[str, Any]) -> str:
+    lines = [
+        "AI Client Governance Effectiveness Report",
+        f"DB: {report['db']}",
+        f"Task: {report['task_id'] or '<any>'}",
+        "",
+        "Metric deltas:",
+    ]
+    for name, diff in report["diff"].items():
+        lines.append(
+            f"  {name}: before={diff['before']} after={diff['after']} "
+            f"delta={diff['delta']} delta_percent={diff['delta_percent']}"
+        )
+    return "\n".join(lines)
+
+
+def format_effectiveness_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# AI Client Governance Effectiveness Report",
+        "",
+        f"- DB: `{report['db']}`",
+        f"- Task: `{report['task_id'] or '<any>'}`",
+        "",
+        "| Metric | Before | After | Delta | Delta % |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for name, diff in report["diff"].items():
+        lines.append(
+            f"| `{name}` | {diff['before']} | {diff['after']} | {diff['delta']} | {diff['delta_percent']} |"
+        )
     return "\n".join(lines)
 
 
@@ -919,6 +1228,17 @@ def command_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_effectiveness(args: argparse.Namespace) -> int:
+    report = build_effectiveness_report(args)
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.format == "markdown":
+        print(format_effectiveness_markdown(report))
+    else:
+        print(format_effectiveness_text(report))
+    return 0
+
+
 def telemetry_events(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     events = read_events(
@@ -935,13 +1255,15 @@ def telemetry_events(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Record and analyze unified execution telemetry in aicg.db.")
-    parser.add_argument("--root", default=".", help="Host project root. Default: current directory.")
-    parser.add_argument("--db", help="SQLite database path. Default: <root>/.ai-client/project/state/aicg.db.")
+    common_cli_args.add_common_global_args(parser, names=("root", "db"))
     sub = parser.add_subparsers(dest="command_name", required=True)
 
-    sub.add_parser("init", help="Create or migrate telemetry tables.").set_defaults(func=command_init)
+    init = sub.add_parser("init", help="Create or migrate telemetry tables.")
+    common_cli_args.add_common_global_args(init, names=("root", "db"), suppress_default=True)
+    init.set_defaults(func=command_init)
 
     record = sub.add_parser("record", help="Record one execution telemetry span/event.")
+    common_cli_args.add_common_global_args(record, names=("root", "db"), suppress_default=True)
     record.add_argument("--span-id", default="", help="Explicit span id. Default: generated UUID.")
     record.add_argument("--trace-id", default="", help="Trace id shared by related spans. Default: span id.")
     record.add_argument("--parent-span-id", default="", help="Parent span id.")
@@ -979,6 +1301,7 @@ def build_parser() -> argparse.ArgumentParser:
     record.set_defaults(func=command_record)
 
     report = sub.add_parser("report", help="Summarize execution telemetry.")
+    common_cli_args.add_common_global_args(report, names=("root", "db"), suppress_default=True)
     report.add_argument("--task-id", default="", help="Only include spans for one structured task id.")
     report.add_argument("--trace-id", default="", help="Only include spans for one trace id.")
     report.add_argument("--since", default="", help="Only include spans at or after this ISO timestamp.")
@@ -987,7 +1310,23 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--format", choices=("text", "markdown", "json"), default="text")
     report.set_defaults(func=command_report)
 
+    effectiveness = sub.add_parser("effectiveness", help="Compare before/after telemetry windows or traces.")
+    common_cli_args.add_common_global_args(effectiveness, names=("root", "db"), suppress_default=True)
+    effectiveness.add_argument("--task-id", default="", help="Shared task id for both sides.")
+    effectiveness.add_argument("--baseline-task-id", default="", help="Task id for the baseline side.")
+    effectiveness.add_argument("--candidate-task-id", default="", help="Task id for the candidate side.")
+    effectiveness.add_argument("--baseline-trace-id", default="", help="Trace id for the baseline side.")
+    effectiveness.add_argument("--candidate-trace-id", default="", help="Trace id for the candidate side.")
+    effectiveness.add_argument("--baseline-since", default="", help="Baseline window start ISO timestamp.")
+    effectiveness.add_argument("--baseline-until", default="", help="Baseline window end ISO timestamp.")
+    effectiveness.add_argument("--candidate-since", default="", help="Candidate window start ISO timestamp.")
+    effectiveness.add_argument("--candidate-until", default="", help="Candidate window end ISO timestamp.")
+    effectiveness.add_argument("--top", type=int, default=10, help="Number of trace-context rows to include.")
+    effectiveness.add_argument("--format", choices=("text", "markdown", "json"), default="text")
+    effectiveness.set_defaults(func=command_effectiveness)
+
     events = sub.add_parser("events", help="Print raw normalized telemetry events as JSON.")
+    common_cli_args.add_common_global_args(events, names=("root", "db"), suppress_default=True)
     events.add_argument("--task-id", default="", help="Only include events for one structured task id.")
     events.add_argument("--trace-id", default="", help="Only include events for one trace id.")
     events.add_argument("--since", default="", help="Only include events at or after this ISO timestamp.")

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ai_client_governance.common import cli_arguments as common_cli_args
 from ai_client_governance.records import task_queue, telemetry
 from ai_client_governance.runtime.scope import classify_scope
 
@@ -132,6 +133,17 @@ def governance_command(root: Path, *parts: str) -> str:
 
 
 @dataclass(frozen=True)
+class CommandCapability:
+    capability: str
+    risk_level: str
+    side_effect: str
+    cache_eligible: bool
+    parallel_eligible: bool
+    approval_required: bool
+    approval_reason: str
+
+
+@dataclass(frozen=True)
 class PlannedCommand:
     id: str
     command: str
@@ -139,6 +151,7 @@ class PlannedCommand:
     cwd: str
     kind: str
     reason: str
+    capability: CommandCapability
 
 
 @dataclass(frozen=True)
@@ -283,6 +296,99 @@ def classify_command(command: str) -> tuple[str, str]:
     return "sequential", "unknown side effects, keep ordering conservative"
 
 
+def command_capability(command: str, kind: str) -> CommandCapability:
+    """Expose policy inputs without turning the planner into the policy engine.
+
+    The first implementation is intentionally heuristic and additive: task-run
+    already uses ``kind`` for grouping, so changing grouping and enforcement at
+    the same time would make false positives expensive. These fields give the
+    later policy engine stable evidence to gate on while preserving today's
+    conservative execution behavior.
+    """
+    lowered = padded_lower(command)
+    stripped = lowered.strip()
+    capability = "execute"
+    side_effect = "unknown"
+    risk = "medium"
+    approval_required = False
+    approval_reason = ""
+
+    if kind == "readonly":
+        capability = "read"
+        side_effect = "none"
+        risk = "low"
+    elif kind == "validation":
+        capability = "validate"
+        side_effect = "ephemeral"
+        risk = "low"
+    elif kind == "telemetry-wrapped":
+        capability = "telemetry_wrapped"
+        side_effect = "delegated"
+        risk = "medium"
+    elif kind == "stateful":
+        capability = "write"
+        side_effect = "persistent"
+        risk = "high"
+        approval_required = True
+        approval_reason = "stateful command changes repository, coordination, or persistent task state"
+
+    if " git push " in lowered:
+        capability = "git_push"
+        side_effect = "remote"
+        risk = "high"
+        approval_required = True
+        approval_reason = "remote Git write requires separate approval"
+    elif " git commit " in lowered or " git merge " in lowered or " git add " in lowered:
+        capability = "git_write"
+        side_effect = "persistent"
+        risk = "high"
+        approval_required = True
+        approval_reason = "Git write changes repository state"
+    elif " remove-item " in lowered or " rm -rf " in lowered or " del " in lowered or " rmdir " in lowered:
+        capability = "delete"
+        side_effect = "destructive"
+        risk = "high"
+        approval_required = True
+        approval_reason = "delete command can remove files"
+    elif (
+        stripped.startswith("pip install ")
+        or stripped.startswith("npm install ")
+        or stripped.startswith("pnpm install ")
+        or stripped.startswith("yarn add ")
+        or " poetry add " in lowered
+    ):
+        capability = "install"
+        side_effect = "dependency_or_network"
+        risk = "high"
+        approval_required = True
+        approval_reason = "dependency installation can change lockfiles and supply-chain surface"
+    elif (
+        stripped.startswith("curl ")
+        or stripped.startswith("wget ")
+        or " invoke-webrequest " in lowered
+        or " invoke-restmethod " in lowered
+    ):
+        capability = "network"
+        side_effect = "network"
+        risk = "medium"
+
+    cache_eligible = kind in {"readonly", "validation"} and not any(
+        stripped.startswith(prefix) for prefix in UNCACHEABLE_PREFIXES
+    )
+    parallel_eligible = kind in {"readonly", "validation"}
+    if approval_required and not approval_reason:
+        approval_reason = "high-risk command requires explicit approval boundary"
+    return CommandCapability(
+        capability=capability,
+        risk_level=risk,
+        side_effect=side_effect,
+        cache_eligible=cache_eligible,
+        parallel_eligible=parallel_eligible,
+        approval_required=approval_required,
+        approval_reason=approval_reason,
+    )
+
+
 def default_commands(args: argparse.Namespace) -> list[str]:
     root = Path(args.root).resolve()
     gov = lambda *parts: governance_command(root, *parts)
@@ -331,6 +437,7 @@ def dedupe_commands(commands: list[str], cwd: str) -> tuple[list[PlannedCommand]
             cwd=cwd,
             kind=kind,
             reason=reason,
+            capability=command_capability(normalized, kind),
         )
         seen[key] = item
         planned.append(item)
@@ -386,6 +493,18 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
     scope = classify_scope(root=root, paths=args.changed_path, command="\n".join(commands), cwd=cwd).to_dict()
     parallel_groups = [group for group in groups if group.can_parallel and len(group.commands) > 1]
     stateful_groups = [group for group in groups if group.kind in {"stateful", "sequential", "telemetry-wrapped"}]
+    command_classifications = [
+        {
+            "id": command.id,
+            "group_id": group.id,
+            "command": command.normalized,
+            "kind": command.kind,
+            "reason": command.reason,
+            **asdict(command.capability),
+        }
+        for group in groups
+        for command in group.commands
+    ]
     payload: dict[str, Any] = {
         "task_id": args.task_id,
         "join_point": args.event,
@@ -408,9 +527,13 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
                 "strategy": group.strategy,
                 "can_parallel": group.can_parallel,
                 "commands": [command.normalized for command in group.commands],
+                "command_ids": [command.id for command in group.commands],
+                "capabilities": [asdict(command.capability) for command in group.commands],
             }
             for group in groups
         ],
+        "command_classifications": command_classifications,
+        "approval_required_count": len([item for item in command_classifications if item["approval_required"]]),
         "skipped_duplicates": [asdict(item) for item in skipped],
         "generated_at": utc_now(),
     }
@@ -518,7 +641,7 @@ def cache_key_for(
 
 def command_cacheable(command: PlannedCommand) -> tuple[bool, str]:
     normalized = command.normalized.lower()
-    if command.kind not in {"readonly", "validation"}:
+    if not command.capability.cache_eligible:
         return False, f"{command.kind} nodes are ordered/no-cache"
     if any(normalized.startswith(prefix) for prefix in UNCACHEABLE_PREFIXES):
         return False, "command depends on live worktree state"
@@ -1192,7 +1315,13 @@ def format_plan_text(plan: CommandCompressionPlan) -> str:
     for group in plan.groups:
         lines.append(f"  - {group.id} {group.kind} {group.strategy}")
         for command in group.commands:
-            lines.append(f"    {command.id}: {command.normalized}")
+            cap = command.capability
+            lines.append(
+                f"    {command.id}: {command.normalized} "
+                f"[capability={cap.capability} side_effect={cap.side_effect} risk={cap.risk_level} "
+                f"cache_eligible={cap.cache_eligible} parallel_eligible={cap.parallel_eligible} "
+                f"approval_required={cap.approval_required}]"
+            )
     if plan.skipped_duplicates:
         lines.append("")
         lines.append("Skipped duplicates:")
@@ -1297,14 +1426,16 @@ def add_plan_args(parser: argparse.ArgumentParser) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plan and run local task execution with command compression.")
-    parser.add_argument("--root", default=".", help="Host project root. Default: current directory.")
+    common_cli_args.add_common_global_args(parser, names=("root",))
     sub = parser.add_subparsers(dest="command_name", required=True)
 
     plan = sub.add_parser("plan", help="Build a deterministic command compression plan.")
+    common_cli_args.add_common_global_args(plan, names=("root",), suppress_default=True)
     add_plan_args(plan)
     plan.add_argument("--format", choices=("text", "json"), default="text")
 
     run = sub.add_parser("run", help="Execute a compressed local command DAG.")
+    common_cli_args.add_common_global_args(run, names=("root",), suppress_default=True)
     add_plan_args(run)
     run.add_argument("--input-path", action="append", default=[], help="Declared input path for cache fingerprinting.")
     run.add_argument("--cache", action="store_true", help="Enable safe opt-in cache for readonly/validation nodes.")
@@ -1323,6 +1454,7 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--format", choices=("text", "json"), default="text")
 
     diagnose = sub.add_parser("diagnose", help="Report execution telemetry, cache, and coordination diagnostics.")
+    common_cli_args.add_common_global_args(diagnose, names=("root",), suppress_default=True)
     diagnose.add_argument("--coord-root", help="Repository root whose worktree-coord state should be diagnosed.")
     diagnose.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
     diagnose.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")

@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 import sys
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -151,6 +153,10 @@ def parse_args() -> argparse.Namespace:
     status = sub.add_parser("status", help="Print queue status.")
     common_cli_args.add_common_global_args(status, suppress_default=True)
 
+    lifecycle = sub.add_parser("lifecycle", help="Print a unified queue/task-record lifecycle view.")
+    common_cli_args.add_common_global_args(lifecycle, suppress_default=True)
+    lifecycle.add_argument("--task-id", help="Only report one task id.")
+
     heartbeat = sub.add_parser("heartbeat", help="Print a periodic queue heartbeat.")
     common_cli_args.add_common_global_args(heartbeat, suppress_default=True)
 
@@ -205,6 +211,12 @@ def load_state(path: Path) -> dict[str, Any]:
     data["policy"].setdefault("context_required", True)
     data["policy"].setdefault("approval_required_for_active", True)
     return data
+
+
+def load_state_readonly(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return default_state()
+    return load_state(path)
 
 
 def migrate_schema_v1_state(state: dict[str, Any]) -> None:
@@ -451,6 +463,173 @@ def queue_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_lifecycle_status(source: str, status: str) -> tuple[str, str]:
+    raw = status or "unknown"
+    if source == "task-queue" and raw == "completed":
+        return "done", ""
+    if raw in {"waiting_user", "waiting_tool", "waiting_agent"}:
+        return "active", raw
+    if raw in {
+        "candidate",
+        "awaiting_approval",
+        "ready",
+        "active",
+        "verifying",
+        "done",
+        "blocked",
+        "cancelled",
+        "rejected",
+    }:
+        return raw, ""
+    return "unknown", raw
+
+
+def read_task_record_rows(path: Path, task_id: str | None = None) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    uri = f"file:{path.as_posix()}?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True)
+        con.row_factory = sqlite3.Row
+        table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
+        ).fetchone()
+        if table is None:
+            return []
+        params: list[Any] = []
+        where = ""
+        if task_id:
+            where = "WHERE task_id = ?"
+            params.append(task_id)
+        rows = con.execute(
+            f"SELECT task_id, title, status, trace_id, task_types_json, updated_at FROM tasks {where} ORDER BY updated_at DESC",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+    except sqlite3.Error:
+        return []
+    finally:
+        try:
+            con.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+
+def lifecycle_entry(
+    *,
+    task_id: str,
+    queue_task: dict[str, Any] | None,
+    record_task: dict[str, Any] | None,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    queue_status = str(queue_task.get("status") or "") if queue_task else ""
+    record_status = str(record_task.get("status") or "") if record_task else ""
+    queue_normalized, queue_substatus = normalize_lifecycle_status("task-queue", queue_status)
+    record_normalized, record_substatus = normalize_lifecycle_status("task-record", record_status)
+    lifecycle_status = record_normalized if record_task else queue_normalized
+    if queue_task and record_task and queue_normalized != record_normalized:
+        warnings.append("status_drift")
+        lifecycle_status = "drift"
+    if queue_task is None:
+        warnings.append("missing_in_queue")
+    if record_task is None:
+        warnings.append("missing_in_task_record")
+    queue_trace = str(queue_task.get("trace_id") or "") if queue_task else ""
+    record_trace = str(record_task.get("trace_id") or "") if record_task else ""
+    if queue_trace and record_trace and queue_trace != record_trace:
+        warnings.append("trace_id_drift")
+    return {
+        "task_id": task_id,
+        "lifecycle_status": lifecycle_status,
+        "warnings": warnings,
+        "task_queue": {
+            "exists": queue_task is not None,
+            "task_id": queue_task.get("id", "") if queue_task else "",
+            "raw_status": queue_status,
+            "normalized_status": queue_normalized if queue_task else "",
+            "substatus": queue_substatus,
+            "trace_id": queue_trace,
+            "title": queue_task.get("title", "") if queue_task else "",
+            "updated_at": queue_task.get("updated_at", "") if queue_task else "",
+        },
+        "task_record": {
+            "exists": record_task is not None,
+            "task_id": record_task.get("task_id", "") if record_task else "",
+            "raw_status": record_status,
+            "normalized_status": record_normalized if record_task else "",
+            "substatus": record_substatus,
+            "trace_id": record_trace,
+            "title": record_task.get("title", "") if record_task else "",
+            "updated_at": record_task.get("updated_at", "") if record_task else "",
+        },
+    }
+
+
+def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dict[str, Any]:
+    queue_state = load_state_readonly(path)
+    queue_tasks = {
+        str(task.get("id") or ""): task
+        for task in queue_state.get("tasks", [])
+        if not task_id or str(task.get("id") or "") == task_id
+    }
+    record_rows = {
+        str(row.get("task_id") or ""): row
+        for row in read_task_record_rows(path, task_id)
+    }
+    entries: list[dict[str, Any]] = []
+    used_queue: set[str] = set()
+    used_record: set[str] = set()
+    for item_id in sorted(set(queue_tasks) & set(record_rows)):
+        entries.append(lifecycle_entry(task_id=item_id, queue_task=queue_tasks[item_id], record_task=record_rows[item_id]))
+        used_queue.add(item_id)
+        used_record.add(item_id)
+
+    remaining_records_by_trace = {
+        str(row.get("trace_id") or ""): (record_id, row)
+        for record_id, row in record_rows.items()
+        if record_id not in used_record and row.get("trace_id")
+    }
+    for queue_id, queue_task in sorted(queue_tasks.items()):
+        if queue_id in used_queue:
+            continue
+        trace_id = str(queue_task.get("trace_id") or "")
+        match = remaining_records_by_trace.get(trace_id)
+        if match:
+            record_id, record_task = match
+            entry = lifecycle_entry(task_id=queue_id, queue_task=queue_task, record_task=record_task)
+            entry["warnings"].append("id_trace_drift")
+            entries.append(entry)
+            used_queue.add(queue_id)
+            used_record.add(record_id)
+
+    for queue_id, queue_task in sorted(queue_tasks.items()):
+        if queue_id not in used_queue:
+            entries.append(lifecycle_entry(task_id=queue_id, queue_task=queue_task, record_task=None))
+    for record_id, record_task in sorted(record_rows.items()):
+        if record_id not in used_record:
+            entries.append(lifecycle_entry(task_id=record_id, queue_task=None, record_task=record_task))
+    warnings = sorted({warning for entry in entries for warning in entry["warnings"]})
+    status_counts = Counter(str(entry.get("lifecycle_status") or "unknown") for entry in entries)
+    queue_total = len(queue_tasks)
+    record_total = len(record_rows)
+    return {
+        "state_db": path.as_posix(),
+        "root": root.as_posix(),
+        "task_id": task_id or "",
+        "schema_version": SCHEMA_VERSION,
+        "entry_count": len(entries),
+        "status_counts": dict(status_counts),
+        "task_record_minus_queue_total": record_total - queue_total,
+        "warnings": warnings,
+        "entries": entries,
+        "status_mapping": {
+            "task_queue.completed": "done",
+            "task_record.done": "done",
+            "waiting_user|waiting_tool|waiting_agent": "active with substatus",
+        },
+    }
+
+
 def render_summary(summary: dict[str, Any]) -> str:
     lines = [
         "AI Task Workflow",
@@ -490,6 +669,31 @@ def render_summary(summary: dict[str, Any]) -> str:
         lines.append("Blocked:")
         for task in summary["blocked"]:
             lines.append(f"  - {task.get('id')}: {task.get('title')}")
+    return "\n".join(lines)
+
+
+def render_lifecycle(summary: dict[str, Any]) -> str:
+    lines = [
+        "AI Task Unified Lifecycle",
+        f"DB: {summary['state_db']}",
+        f"Entries: {summary['entry_count']}",
+        "Counts: "
+        + ", ".join(f"{key}={value}" for key, value in sorted(summary["status_counts"].items()) if value),
+        f"Task-record minus queue total: {summary['task_record_minus_queue_total']}",
+        f"Warnings: {', '.join(summary['warnings']) if summary['warnings'] else 'none'}",
+        "",
+    ]
+    for entry in summary["entries"]:
+        queue = entry["task_queue"]
+        record = entry["task_record"]
+        lines.append(
+            f"- {entry['task_id']}: lifecycle={entry['lifecycle_status']} "
+            f"queue={queue['raw_status'] or '<missing>'} record={record['raw_status'] or '<missing>'}"
+        )
+        if entry["warnings"]:
+            lines.append(f"  warnings={', '.join(entry['warnings'])}")
+    if not summary["entries"]:
+        lines.append("No lifecycle entries.")
     return "\n".join(lines)
 
 
@@ -776,6 +980,15 @@ def command_status(args: argparse.Namespace, root: Path, path: Path) -> int:
     return 0
 
 
+def command_lifecycle(args: argparse.Namespace, root: Path, path: Path) -> int:
+    summary = lifecycle_summary(root, path, args.task_id)
+    if args.format == "json":
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        print(render_lifecycle(summary))
+    return 0
+
+
 def command_heartbeat(args: argparse.Namespace, root: Path, path: Path) -> int:
     state = load_state(path)
     summary = queue_summary(state)
@@ -818,6 +1031,8 @@ def dispatch_command(args: argparse.Namespace, root: Path, path: Path) -> int:
         return command_reject(args, root, path)
     if args.command == "status":
         return command_status(args, root, path)
+    if args.command == "lifecycle":
+        return command_lifecycle(args, root, path)
     if args.command == "heartbeat":
         return command_heartbeat(args, root, path)
     if args.command == "validate":

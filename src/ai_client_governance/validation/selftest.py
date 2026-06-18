@@ -763,12 +763,30 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--format",
             "json",
         ],
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "task-queue",
+            "lifecycle",
+            "--db",
+            str(db),
+            "--task-id",
+            "TQ-selftest-new",
+            "--format",
+            "json",
+        ],
     ]
 
     commands = [run_command(command, cwd=root, env_root=root) for command in commands_to_run]
-    old_order_status = commands[-2]
-    subcommand_order_status = commands[-1]
+    old_order_status = commands[-3]
+    subcommand_order_status = commands[-2]
+    lifecycle_status = commands[-1]
     summary = json.loads(subcommand_order_status.stdout)
+    lifecycle: dict[str, object] = {}
+    try:
+        lifecycle = json.loads(lifecycle_status.stdout)
+    except json.JSONDecodeError:
+        pass
     tasks = []
     for group in ("active", "ready", "waiting", "awaiting_approval", "candidates", "blocked"):
         tasks.extend(summary.get(group, []))
@@ -786,6 +804,8 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
         and statuses.get("TQ-selftest-new") == "completed"
         and "\"completed\"" in old_order_status.stdout
         and "\"completed\"" in subcommand_order_status.stdout
+        and lifecycle.get("status_counts", {}).get("done") == 1
+        and "missing_in_task_record" in lifecycle.get("warnings", [])
     )
     return TestResult(
         name="task-queue-task-id-priority",
@@ -794,6 +814,101 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "complete --task-id completed the requested task without touching cancelled same-trace task"
             if passed
             else f"unexpected queue statuses: {statuses}"
+        ),
+        commands=commands,
+    )
+
+
+def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
+    task_id = "TQ-LIFECYCLE-SELFTEST"
+    db = run_dir / "task-lifecycle-selftest.db"
+    trace_id = "trace-structured-selftest"
+    tracking = ".ai-client/project/records/task-tracking/lifecycle-selftest.md"
+    payload = structured_payload(task_id, include_worktree=False)
+    payload_path = run_dir / "task-lifecycle-record.json"
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    commands = [
+        run_command(
+            queue_command(
+                root,
+                db,
+                "enqueue",
+                "--task-id",
+                task_id,
+                "--title",
+                "lifecycle selftest",
+                "--message",
+                "lifecycle selftest",
+                "--task-tracking",
+                tracking,
+                "--approval-label",
+                "批准：selftest",
+                "--trace-id",
+                trace_id,
+                "--status",
+                "ready",
+            ),
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "complete", "--task-id", task_id, "--trace-id", trace_id), cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "apply",
+                "--db",
+                str(db),
+                "--json",
+                str(payload_path),
+                "--replace",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "lifecycle",
+                "--db",
+                str(db),
+                "--task-id",
+                task_id,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    lifecycle: dict[str, object] = {}
+    try:
+        lifecycle = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass
+    entries = lifecycle.get("entries", []) if isinstance(lifecycle.get("entries"), list) else []
+    first = entries[0] if entries and isinstance(entries[0], dict) else {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and lifecycle.get("status_counts", {}).get("done") == 1
+        and lifecycle.get("warnings") == []
+        and first.get("lifecycle_status") == "done"
+        and first.get("task_queue", {}).get("raw_status") == "completed"
+        and first.get("task_record", {}).get("raw_status") == "done"
+    )
+    return TestResult(
+        name="task-lifecycle-unified-status",
+        passed=passed,
+        summary=(
+            "task-queue lifecycle normalizes queue completed and task-record done without drift"
+            if passed
+            else "task lifecycle unified status regression failed"
         ),
         commands=commands,
     )
@@ -1746,6 +1861,8 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
                 "git status --short --branch",
                 "--command",
                 "python scripts/ai_client_governance.py validate-doc --root .",
+                "--command",
+                "git add AGENTS.md",
                 "--format",
                 "json",
             ],
@@ -1788,6 +1905,9 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
         and "\"scope_kind\": \"ai-client-governance-common\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
+        and "\"approval_required_count\": 1" in plan_output
+        and "\"capability\": \"git_write\"" in plan_output
+        and "\"side_effect\": \"persistent\"" in plan_output
         and "local-command-compression" in plan_output
         and ".ai-client/ai-client-governance/scripts/ai_client_governance.py selftest" in host_plan_output
         and "python scripts/ai_client_governance.py selftest" not in host_plan_output
@@ -2006,6 +2126,132 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             "task-run run writes task/tool telemetry, reuses safe cache, and diagnose keeps raw shell gap fail-closed"
             if passed
             else "task-run DAG/cache/diagnostics regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "telemetry-trace-effectiveness.db"
+    baseline_trace = "4bf92f3577b34da6a3ce929d0e0e4736"
+    candidate_trace = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
+                "--db",
+                str(db),
+                "record",
+                "--span-id",
+                "00f067aa0ba902b7",
+                "--trace-id",
+                baseline_trace,
+                "--name",
+                "gate-pool",
+                "--span-kind",
+                "gate",
+                "--phase",
+                "validation",
+                "--event-type",
+                "gate-pool",
+                "--status",
+                "succeeded",
+                "--duration-ms",
+                "120",
+                "--attribute-kv",
+                f"traceparent=00-{baseline_trace}-00f067aa0ba902b7-01",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
+                "record",
+                "--db",
+                str(db),
+                "--span-id",
+                "b9c7c989f97918e1",
+                "--trace-id",
+                candidate_trace,
+                "--name",
+                "gate-pool",
+                "--span-kind",
+                "gate",
+                "--phase",
+                "validation",
+                "--event-type",
+                "gate-pool",
+                "--status",
+                "succeeded",
+                "--duration-ms",
+                "80",
+                "--cached",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
+                "report",
+                "--db",
+                str(db),
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
+                "effectiveness",
+                "--db",
+                str(db),
+                "--baseline-trace-id",
+                baseline_trace,
+                "--candidate-trace-id",
+                candidate_trace,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    report: dict[str, object] = {}
+    effectiveness: dict[str, object] = {}
+    try:
+        report = json.loads(commands[2].stdout)
+        effectiveness = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    trace_context = report.get("trace_context", {}) if isinstance(report.get("trace_context"), dict) else {}
+    diff = effectiveness.get("diff", {}) if isinstance(effectiveness.get("diff"), dict) else {}
+    duration_diff = diff.get("duration_sum_ms", {}) if isinstance(diff.get("duration_sum_ms"), dict) else {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and trace_context.get("trace_count") == 2
+        and trace_context.get("valid_traceparent_attribute_count") == 1
+        and duration_diff.get("delta") == -40
+        and effectiveness.get("candidate", {}).get("metrics", {}).get("cache", {}).get("hits") == 1
+    )
+    return TestResult(
+        name="telemetry-trace-context-effectiveness",
+        passed=passed,
+        summary=(
+            "telemetry report exposes trace context and effectiveness compares before/after metrics"
+            if passed
+            else "telemetry trace context/effectiveness regression failed"
         ),
         commands=commands,
     )
@@ -3141,6 +3387,7 @@ def main() -> int:
             test_input_and_output_closeout_gate(root, run_dir),
             test_multi_agent_acceptance_matrix_gate(root, run_dir),
             test_task_queue_task_id_priority(root, run_dir),
+            test_task_lifecycle_unified_status(root, run_dir),
             test_gate_pool_validate_doc_tracking_context(root, run_dir),
             test_structured_task_record_gate(root, run_dir),
             test_preflight_boundary_hardening(root, run_dir),
@@ -3148,6 +3395,7 @@ def main() -> int:
             test_lifecycle_input_filter_preflight(root, run_dir),
             test_task_run_command_compression_plan(root, run_dir),
             test_task_run_dag_cache_diagnostics(root, run_dir),
+            test_telemetry_trace_context_effectiveness(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_file_ownership_audit(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),

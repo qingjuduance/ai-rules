@@ -42,10 +42,12 @@
       "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent",
       "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose --format json",
       "telemetryReport": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report --format json",
+      "telemetryEffectiveness": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry effectiveness --baseline-trace-id <trace-id> --candidate-trace-id <trace-id> --format json",
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
       "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id> --event preflight",
       "taskRecordStatus": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record status",
+      "taskQueueLifecycle": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue lifecycle --task-id <task-id> --format json",
       "taskGateStructured": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate --task-id <task-id>"
     },
     "mandatoryInputFilter": {
@@ -70,6 +72,7 @@
         "mutating-tasks"
       ],
       "failPolicy": "fail_closed",
+      "capabilityPolicy": "task-run plan exposes per-command capability, risk_level, side_effect, cache_eligible, parallel_eligible, approval_required, and approval_reason as planner facts; heuristic classification does not replace approval or the future policy engine.",
       "cachePolicy": "Cache is opt-in and limited to readonly/validation nodes; stateful, sequential, Git write, lock, task-record apply, git status, git diff, and git worktree list commands are no-cache.",
       "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted. Telemetry-wrapped commands are compensation evidence but do not clear raw_shell_gap; use task-run diagnose --require-raw-shell-coverage or shell-adapter diagnose --require-auto-intercept for fail-closed checks."
     },
@@ -199,7 +202,9 @@
       "springAop": "https://docs.spring.io/spring-framework/reference/core/aop/introduction-defn.html",
       "bazelRemoteCache": "https://bazel.build/remote/cache-remote",
       "gradleBuildCache": "https://docs.gradle.org/current/userguide/build_cache.html",
-      "openTelemetryTraces": "https://opentelemetry.io/docs/concepts/signals/traces/"
+      "openTelemetryTraces": "https://opentelemetry.io/docs/concepts/signals/traces/",
+      "w3cTraceContext": "https://www.w3.org/TR/trace-context/",
+      "pythonArgparseIntermixed": "https://docs.python.org/3/library/argparse.html#intermixed-parsing"
     },
     "documentImpactPolicy": {
       "phase": "post-change",
@@ -215,10 +220,12 @@
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
-      "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; runtime components include a mutating-task fast path so small repository writes cannot skip the node; task-run plan provides the local dedupe and grouping event payload",
+      "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; runtime components include a mutating-task fast path so small repository writes cannot skip the node; task-run plan provides the local dedupe, grouping, and per-command capability/risk/side-effect event payload",
       "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes telemetry events to aicg.db by default, and stores trace JSON when requested",
       "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write telemetry events",
       "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, telemetry failures, cache hit/miss counts, coord locks/sessions, missing worktrees, task-record/task-queue alignment, current task presence, shell-adapter auto-intercept evidence, shell-adapter telemetry, telemetry-wrapped command evidence, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope; --require-raw-shell-coverage exits non-zero when auto-intercept is absent",
+      "telemetryEffectivenessPolicy": "telemetry report exposes OpenTelemetry/W3C Trace Context style report-layer mapping; telemetry effectiveness compares before/after spans without migrating the SQLite schema",
+      "taskLifecycleViewPolicy": "task-queue lifecycle is a read-only unified view over task queue and structured task record statuses; completed and done normalize to lifecycle done while missing/status/trace drift remains visible",
       "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; input-filter records can be applied before worktree creation, while final gates require worktree evidence for mutating tasks; task-id mode does not require Markdown task tracking",
       "entrypointResolutionPolicy": "runtime command generators and diagnostics resolve only embedded .ai-client/ai-client-governance or governance-repo-local scripts/ai_client_governance.py; host-root scripts/ai_client_governance.py is not a fallback",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, aicg.db worktree state, and related task tracking",
