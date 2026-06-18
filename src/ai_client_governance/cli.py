@@ -14,7 +14,15 @@ from ai_client_governance.gates import architecture_guard, gate_pool, session_ga
 from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
-from ai_client_governance.records import scan_corrections, task_queue, task_record, telemetry, tool_flow, tool_invocations
+from ai_client_governance.records import (
+    framework_debt,
+    scan_corrections,
+    task_queue,
+    task_record,
+    telemetry,
+    tool_flow,
+    tool_invocations,
+)
 from ai_client_governance.runtime import contract, registry as runtime_registry, shell_adapter, task_run
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
@@ -31,6 +39,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
     "doc-index": ("Build and check Markdown document reference indexes.", doc_index.main),
     "file-ownership": ("Audit .ai-client host-project tracked and ignored paths.", file_ownership.main),
+    "framework-debt": ("Track framework-level design debt.", framework_debt.main),
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
     "lifecycle": ("Run lifecycle preflight/finalize/status.", lifecycle.main),
     "rule-audit": ("Audit rule-entry and README sections for tooling migration.", rule_tooling_audit.main),

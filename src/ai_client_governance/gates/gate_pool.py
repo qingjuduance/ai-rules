@@ -74,6 +74,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db", help="Structured task-record SQLite path.")
     parser.add_argument("--task-type", action="append", default=[], help="Task type for task/session gates.")
     parser.add_argument("--changed-path", action="append", default=[], help="Path changed by this task.")
+    parser.add_argument("--completion-profile", choices=("fast", "full"), default="fast", help="completion-test validation profile.")
+    parser.add_argument("--budget-seconds", type=int, help="Maximum estimated seconds for required validation checks.")
+    parser.add_argument("--allow-expensive", action="store_true", help="Allow completion-test required checks to exceed budget.")
+    parser.add_argument("--require-analysis", action="store_true", help="Require completion-test analysis contract.")
+    parser.add_argument("--analysis-summary", default="", help="Task understanding passed to completion-test.")
+    parser.add_argument("--analysis-scope", action="append", default=[], help="Explicit analysis scope passed to completion-test.")
+    parser.add_argument("--non-goal", action="append", default=[], help="Non-goal passed to completion-test.")
+    parser.add_argument("--risk", action="append", default=[], help="Risk boundary passed to completion-test.")
+    parser.add_argument("--acceptance", action="append", default=[], help="Acceptance criterion passed to completion-test.")
     parser.add_argument(
         "--event",
         choices=(
@@ -356,6 +365,23 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             completion_args.extend(["--task-id", args.task_id])
         if args.db:
             completion_args.extend(["--db", args.db])
+        completion_args.extend(["--profile", args.completion_profile])
+        if args.budget_seconds is not None:
+            completion_args.extend(["--budget-seconds", str(args.budget_seconds)])
+        if args.allow_expensive:
+            completion_args.append("--allow-expensive")
+        if args.require_analysis:
+            completion_args.append("--require-analysis")
+        if args.analysis_summary:
+            completion_args.extend(["--analysis-summary", args.analysis_summary])
+        for value in args.analysis_scope:
+            completion_args.extend(["--analysis-scope", value])
+        for value in args.non_goal:
+            completion_args.extend(["--non-goal", value])
+        for value in args.risk:
+            completion_args.extend(["--risk", value])
+        for value in args.acceptance:
+            completion_args.extend(["--acceptance", value])
         for task_type in task_types:
             completion_args.extend(["--task-type", task_type])
         for path in changed_paths:

@@ -552,6 +552,32 @@ def default_components() -> list[ComponentDefinition]:
             performance_budget="local JSON/text render; no repo scan",
         ),
         component(
+            "preflight.gate.analysis-contract",
+            "cross-cutting-gate",
+            "preflight",
+            205,
+            "Require a clear task analysis contract before write-intent.",
+            task_sizes=("medium", "large"),
+            events=("plan-output", "write-intent", "resume"),
+            requires_facts=("task_id", "changed_paths", "acceptance_criteria"),
+            produces_facts=("analysis_contract", "validation_budget"),
+            mechanism_label="ai_client_governance.py completion-test --require-analysis",
+            gate_label="ai_client_governance.py completion-test --require-analysis",
+            gate_step="analysis-contract",
+            fail_policy="fail_closed",
+            effect="readonly",
+            dedupe_key="task_id:event:changed_paths:analysis-contract",
+            condition=(
+                "Run before editing or expensive validation; if scope, non-goals, risks, or acceptance are unclear, "
+                "stop before write-intent instead of compensating with broad tests at closeout."
+            ),
+            performance_budget="local path classification and constant-size analysis fields; no repository scan",
+            metadata={
+                "required_fields": ("analysis-summary", "analysis-scope", "non-goal", "risk", "acceptance"),
+                "budget_policy": "required validation checks must fit the declared budget unless explicitly upgraded",
+            },
+        ),
+        component(
             "preflight.interceptor.plan-approval-boundary",
             "processing-interceptor",
             "preflight",
@@ -1413,6 +1439,24 @@ def default_components() -> list[ComponentDefinition]:
                 ),
                 "fact_source": ".ai-client/project/state/aicg.db",
             },
+        ),
+        component(
+            "reporter.framework-debt",
+            "reporter",
+            "report",
+            906,
+            "Report open framework design debt before architecture passes.",
+            events=("plan-output", "resume", "final-output"),
+            produces_facts=("framework_debt_items",),
+            mechanism_label="ai_client_governance.py framework-debt list",
+            gate_step="framework-debt",
+            fail_policy="report_only",
+            effect="readonly",
+            condition=(
+                "Run when a design flaw is real but needs a framework-level change window, "
+                "such as CLI parser ergonomics or repo-context-aware scope classification."
+            ),
+            performance_budget="single SQLite read; no repository scan",
         ),
         component(
             "reporter.tool-flow",

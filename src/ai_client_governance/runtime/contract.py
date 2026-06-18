@@ -229,6 +229,7 @@ def build_contract(task_types: list[str], event: str) -> Contract:
 
     gate_requirements = [
         "Run lifecycle input-filter for the user-message join point and persist an events[] row with event_type=input-filter.preflight.",
+        "Run completion-test --require-analysis before write-intent and record explicit scope, non-goals, risks, acceptance, and validation budget.",
         "Create or update the structured record before running final gates.",
         "Run task-record gate --task-id <id> before final answer.",
     ]
@@ -263,9 +264,11 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         gate_requirements.append("Resume tasks should include PDF/layout validation rows when Markdown/PDF is changed.")
 
     write_commands = [
+        "python <AICG_REPO>/scripts/ai_client_governance.py completion-test --require-analysis --analysis-summary <summary> --analysis-scope <scope> --non-goal <non-goal> --risk <risk> --acceptance <acceptance> --budget-seconds <seconds>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent --trace-json <trace.json>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-run diagnose --format json",
+        "python <AICG_REPO>/scripts/ai_client_governance.py framework-debt add --item-id <id> --title <title> --problem <problem> --impact <impact> --desired-change <change> --framework-change-required <reason>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record init",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
         "python <AICG_REPO>/scripts/ai_client_governance.py task-record gate --task-id <task-id>",

@@ -2362,6 +2362,184 @@ def test_completion_test_profiles(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_completion_test_analysis_budget(root: Path, run_dir: Path) -> TestResult:
+    base_args = [
+        sys.executable,
+        str(ai_client_governance_entrypoint()),
+        "completion-test",
+        "--task-type",
+        "rules-script",
+        "--changed-path",
+        "src/ai_client_governance/validation/completion.py",
+        "--format",
+        "json",
+    ]
+    missing = run_command([*base_args, "--require-analysis"], cwd=root, env_root=root)
+    complete = run_command(
+        [
+            *base_args,
+            "--require-analysis",
+            "--analysis-summary",
+            "Add upfront analysis contract and validation budget.",
+            "--analysis-scope",
+            "src/ai_client_governance/validation/completion.py",
+            "--non-goal",
+            "Do not run full selftest for a narrow parser change.",
+            "--risk",
+            "Budget must fail closed when expensive checks are required.",
+            "--acceptance",
+            "JSON reports ready analysis and unblocked budget.",
+            "--budget-seconds",
+            "90",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    over_budget = run_command(
+        [
+            *base_args,
+            "--profile",
+            "full",
+            "--require-analysis",
+            "--analysis-summary",
+            "Add upfront analysis contract and validation budget.",
+            "--analysis-scope",
+            "src/ai_client_governance/validation/completion.py",
+            "--non-goal",
+            "Do not hide unclear analysis behind expensive validation.",
+            "--risk",
+            "Full selftest can exceed a narrow task budget.",
+            "--acceptance",
+            "Budget overflow exits non-zero.",
+            "--budget-seconds",
+            "60",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    try:
+        missing_payload = json.loads(missing.stdout)
+        complete_payload = json.loads(complete.stdout)
+        over_budget_payload = json.loads(over_budget.stdout)
+    except json.JSONDecodeError:
+        missing_payload = {}
+        complete_payload = {}
+        over_budget_payload = {}
+
+    passed = (
+        missing.exit_code == 1
+        and complete.exit_code == 0
+        and over_budget.exit_code == 1
+        and "analysis-summary" in missing_payload.get("missing_analysis", [])
+        and complete_payload.get("analysis_contract", {}).get("ready_for_write") is True
+        and complete_payload.get("validation_budget", {}).get("blocked_by_budget") is False
+        and "validation-budget" in over_budget_payload.get("budget_errors", [])
+    )
+    return TestResult(
+        name="completion-test-analysis-budget",
+        passed=passed,
+        summary=(
+            "completion-test blocks unclear analysis and over-budget validation"
+            if passed
+            else "completion-test analysis/budget enforcement regressed"
+        ),
+        commands=[missing, complete, over_budget],
+    )
+
+
+def test_framework_debt_register(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "framework-debt.db"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "init",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "add",
+                "--item-id",
+                "FD-SELFTEST-CLI-GLOBAL-ARGS",
+                "--title",
+                "CLI global args still need framework-wide parser migration",
+                "--category",
+                "cli",
+                "--severity",
+                "P1",
+                "--problem",
+                "Some subcommand CLIs still reject root options after nested subcommands.",
+                "--impact",
+                "Agents waste time and tokens retrying equivalent commands.",
+                "--desired-change",
+                "Adopt a uniform command parser pattern across all governance CLIs.",
+                "--framework-change-required",
+                "The fix crosses subparser setup in multiple command modules.",
+                "--workaround",
+                "Place common options before unsupported nested subcommands.",
+                "--related-task-id",
+                "TASK-SELFTEST",
+                "--replace",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "list",
+                "--category",
+                "cli",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    try:
+        payload = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    item = next(
+        (
+            row for row in payload.get("items", [])
+            if isinstance(row, dict) and row.get("item_id") == "FD-SELFTEST-CLI-GLOBAL-ARGS"
+        ),
+        {},
+    )
+    passed = all(command.exit_code == 0 for command in commands) and item.get("severity") == "P1"
+    return TestResult(
+        name="framework-debt-register",
+        passed=passed,
+        summary=(
+            "framework-debt records and lists architecture-level design issues"
+            if passed
+            else "framework-debt register did not persist the expected row"
+        ),
+        commands=commands,
+    )
+
+
 def test_sync_check_records_db_state(root: Path, run_dir: Path) -> TestResult:
     project = run_dir / "sync-check-db-project"
     embedded = project / ".ai-client" / "ai-client-governance"
@@ -2708,6 +2886,8 @@ def main() -> int:
             test_file_ownership_audit(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
             test_completion_test_profiles(root, run_dir),
+            test_completion_test_analysis_budget(root, run_dir),
+            test_framework_debt_register(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),
         ]

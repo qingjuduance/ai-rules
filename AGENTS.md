@@ -94,6 +94,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   状态化和门禁化；不能只依赖单次对话记忆或人工口头约定。
 - 每个修改型任务必须留下可复盘证据：任务输入拆解、审批、worktree、写锁、
   操作 telemetry、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
+- 写入前必须先有分析契约：任务理解、范围/写入面、非目标、风险/不确定性、
+  验收标准和验证预算必须明确。分析契约不完整时先阻断或澄清，不能用更大的
+  测试集合在收口阶段补偿前置分析不清。
 - worktree 创建、状态同步、收口检查和安全清理优先使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task ...`；当前 worktree
   总览用 `worktree-task status --record-state` 写入 `.ai-client/project/state/aicg.db`。
@@ -326,6 +329,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 结构化 task record 至少记录：用户输入拆解、用户要求、触发日志、任务类型、
   worktree 证据、Worktree 完成记录、影响面、操作 telemetry、验证记录、DoD、Git 状态
   和恢复现场。
+- 发现“设计不好但需要框架级改造窗口才能统一处理”的问题时，写入
+  `framework-debt` 表，而不是散落在对话或临时注释里。入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py framework-debt ...`；
+  记录至少包含问题、影响、期望改法、为什么需要框架改造、当前 workaround、
+  下次触发条件和关联任务。
 - 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
 - 模板由程序输出：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates task-tracking`。
@@ -485,8 +493,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 声称任务完成前必须运行或记录 completion test 节点：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test ...`。该节点根据
   changed paths、任务类型和验收标准生成测试计划；规则/脚本变更至少覆盖
-  runtime components、gate-pool dry-run、task-run plan/run/diagnose 和 selftest；
+  runtime components、gate-pool dry-run、task-run plan/run/diagnose 和 focused regression；
   worktree/coord 变更还要覆盖 `worktree-task reconcile --strict`。
+- `completion-test` 必须携带验证预算：默认优先 fast/focused changed-surface
+  检查，完整 selftest 只在 full profile、高风险/发布级变更或显式升级预算时强制。
+  如果 required checks 超出预算，先缩小范围、拆任务或显式升级，不允许反复补跑
+  expensive checks 直到收口。
 - Git push 状态不是定时任务；它属于输出边界审计。计划、状态和最终答复前只报告
   dirty/ahead/behind/push 边界，不自动 push，除非用户明确批准推送。
 - 规则/脚本/文档链路变更后，最终记录必须覆盖治理节点是否可见、门禁是否执行、
