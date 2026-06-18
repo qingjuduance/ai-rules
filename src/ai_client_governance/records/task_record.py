@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_client_governance.common import cli_arguments as common_cli_args
 from ai_client_governance.common.paths import STRUCTURED_DB_PATH
 from ai_client_governance.runtime.scope import COMMON_SCOPE, MIXED_SCOPE, NATIVE_SCOPE, PROJECT_SCOPE, UNKNOWN_SCOPE
 
@@ -81,28 +82,32 @@ def utc_now() -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage structured AI Client Governance task records.")
-    parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
-    parser.add_argument("--db", help="SQLite database path. Default: <ai-client-project>/state/aicg.db.")
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    # Register common globals at both levels so either option order survives.
+    common_cli_args.add_common_global_args(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init", help="Create or migrate the SQLite database.")
+    init = sub.add_parser("init", help="Create or migrate the SQLite database.")
+    common_cli_args.add_common_global_args(init, suppress_default=True)
 
     apply = sub.add_parser("apply", help="Validate and apply one structured task JSON document.")
+    common_cli_args.add_common_global_args(apply, suppress_default=True)
     apply.add_argument("--json", dest="json_path", required=True, help="Input JSON file.")
     apply.add_argument("--replace", action="store_true", help="Replace an existing task with the same id.")
 
     gate = sub.add_parser("gate", help="Validate a task from the structured database.")
+    common_cli_args.add_common_global_args(gate, suppress_default=True)
     gate.add_argument("--task-id", required=True)
     gate.add_argument("--event", choices=("preflight", "final"), default="final")
     gate.add_argument("--task-type", action="append", default=[], help="Required task type override/addition.")
     gate.add_argument("--fail-on-warning", action="store_true")
 
     export = sub.add_parser("export-md", help="Render a human-readable Markdown report from the database.")
+    common_cli_args.add_common_global_args(export, suppress_default=True)
     export.add_argument("--task-id", required=True)
     export.add_argument("--output", help="Output Markdown path. Defaults to stdout.")
 
     status = sub.add_parser("status", help="Print database summary.")
+    common_cli_args.add_common_global_args(status, suppress_default=True)
     status.add_argument("--task-id", help="Optional task id.")
     return parser.parse_args()
 

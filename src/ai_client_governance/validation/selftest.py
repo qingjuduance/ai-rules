@@ -753,10 +753,22 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
         ),
         queue_command(root, db, "validate", "--trace-id", trace_id, "--current-task-tracking", tracking),
         queue_command(root, db, "--format", "json", "status"),
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "task-queue",
+            "status",
+            "--db",
+            str(db),
+            "--format",
+            "json",
+        ],
     ]
 
     commands = [run_command(command, cwd=root, env_root=root) for command in commands_to_run]
-    summary = json.loads(commands[-1].stdout)
+    old_order_status = commands[-2]
+    subcommand_order_status = commands[-1]
+    summary = json.loads(subcommand_order_status.stdout)
     tasks = []
     for group in ("active", "ready", "waiting", "awaiting_approval", "candidates", "blocked"):
         tasks.extend(summary.get(group, []))
@@ -768,7 +780,13 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             if isinstance(task, dict) and task.get("id")
         }
     )
-    passed = all(command.exit_code == 0 for command in commands) and statuses.get("TQ-selftest-old") == "cancelled" and statuses.get("TQ-selftest-new") == "completed"
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and statuses.get("TQ-selftest-old") == "cancelled"
+        and statuses.get("TQ-selftest-new") == "completed"
+        and "\"completed\"" in old_order_status.stdout
+        and "\"completed\"" in subcommand_order_status.stdout
+    )
     return TestResult(
         name="task-queue-task-id-priority",
         passed=passed,
@@ -1260,6 +1278,22 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
             [
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
+                "task-record",
+                "status",
+                "--db",
+                str(db),
+                "--format",
+                "json",
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
                 "task-gate",
                 "--db",
                 str(db),
@@ -1289,25 +1323,43 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
             env_root=root,
         ),
     ]
+    (
+        contract_describe,
+        init_db,
+        invalid_apply,
+        no_worktree_apply,
+        no_worktree_preflight,
+        no_worktree_final,
+        missing_filter_apply,
+        missing_filter_preflight,
+        valid_apply,
+        valid_preflight,
+        valid_final,
+        status_new_order,
+        task_gate,
+        gate_pool,
+    ) = commands
     passed = (
-        commands[0].exit_code == 0
-        and commands[1].exit_code == 0
-        and commands[2].exit_code != 0
-        and commands[3].exit_code == 0
-        and commands[4].exit_code == 0
-        and commands[5].exit_code != 0
-        and commands[6].exit_code == 0
-        and commands[7].exit_code != 0
-        and commands[8].exit_code == 0
-        and commands[9].exit_code == 0
-        and commands[10].exit_code == 0
-        and commands[11].exit_code == 0
-        and commands[12].exit_code == 0
-        and "requirements must contain at least one row" in (commands[2].stdout + commands[2].stderr)
-        and "mutating task has no worktree evidence yet" in (commands[4].stdout + commands[4].stderr)
-        and "mutating tasks require worktree evidence" in (commands[5].stdout + commands[5].stderr)
-        and "input-filter preflight requires" in (commands[7].stdout + commands[7].stderr)
-        and "--task-id" in commands[12].stdout
+        contract_describe.exit_code == 0
+        and init_db.exit_code == 0
+        and invalid_apply.exit_code != 0
+        and no_worktree_apply.exit_code == 0
+        and no_worktree_preflight.exit_code == 0
+        and no_worktree_final.exit_code != 0
+        and missing_filter_apply.exit_code == 0
+        and missing_filter_preflight.exit_code != 0
+        and valid_apply.exit_code == 0
+        and valid_preflight.exit_code == 0
+        and valid_final.exit_code == 0
+        and status_new_order.exit_code == 0
+        and task_gate.exit_code == 0
+        and gate_pool.exit_code == 0
+        and "requirements must contain at least one row" in (invalid_apply.stdout + invalid_apply.stderr)
+        and "mutating task has no worktree evidence yet" in (no_worktree_preflight.stdout + no_worktree_preflight.stderr)
+        and "mutating tasks require worktree evidence" in (no_worktree_final.stdout + no_worktree_final.stderr)
+        and "input-filter preflight requires" in (missing_filter_preflight.stdout + missing_filter_preflight.stderr)
+        and "\"exists\": true" in status_new_order.stdout
+        and "--task-id" in gate_pool.stdout
     )
     return TestResult(
         name="structured-task-record-gate",

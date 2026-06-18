@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_client_governance.common import cli_arguments as common_cli_args
 from ai_client_governance.records import state_store
 
 
@@ -81,12 +82,12 @@ def now_iso() -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage AI task workflow state.")
-    parser.add_argument("--root", default=".", help="Repository root. Default: current directory.")
-    parser.add_argument("--db", help="SQLite database path. Default: <ai-client-project>/state/aicg.db.")
-    parser.add_argument("--format", choices=("text", "json"), default="text")
+    # Register common globals at both levels so either option order survives.
+    common_cli_args.add_common_global_args(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     enqueue = sub.add_parser("enqueue", help="Create or refresh a candidate task.")
+    common_cli_args.add_common_global_args(enqueue, suppress_default=True)
     enqueue.add_argument("--title", required=True)
     enqueue.add_argument("--message", required=True)
     enqueue.add_argument("--source", default="user")
@@ -99,50 +100,62 @@ def parse_args() -> argparse.Namespace:
     enqueue.add_argument("--context", action="append", default=[], help="Context/restoration path.")
 
     request_approval = sub.add_parser("request-approval", help="Move a candidate task to awaiting_approval.")
+    common_cli_args.add_common_global_args(request_approval, suppress_default=True)
     request_approval.add_argument("--task-id", required=True)
     request_approval.add_argument("--approval-label", required=True)
     request_approval.add_argument("--summary", default="")
 
     approve = sub.add_parser("approve", help="Mark an approval-waiting task as ready.")
+    common_cli_args.add_common_global_args(approve, suppress_default=True)
     approve.add_argument("--task-id", required=True)
     approve.add_argument("--approval-label", required=True)
     approve.add_argument("--summary", default="")
 
     start = sub.add_parser("start-next", help="Mark the next ready task active.")
+    common_cli_args.add_common_global_args(start, suppress_default=True)
     start.add_argument("--task-id", help="Specific ready task id. Default: first ready task.")
 
     wait = sub.add_parser("wait", help="Move an active task into a waiting state.")
+    common_cli_args.add_common_global_args(wait, suppress_default=True)
     wait.add_argument("--task-id", required=True)
     wait.add_argument("--kind", choices=sorted(WAIT_STATUS_BY_KIND), required=True)
     wait.add_argument("--reason", required=True)
 
     resume = sub.add_parser("resume", help="Resume a waiting or verifying task back to active.")
+    common_cli_args.add_common_global_args(resume, suppress_default=True)
     resume.add_argument("--task-id", required=True)
     resume.add_argument("--summary", default="")
 
     complete = sub.add_parser("complete", help="Mark a task completed.")
+    common_cli_args.add_common_global_args(complete, suppress_default=True)
     complete.add_argument("--task-id")
     complete.add_argument("--trace-id")
     complete.add_argument("--task-tracking")
     complete.add_argument("--summary", default="")
 
     block = sub.add_parser("block", help="Mark a task blocked.")
+    common_cli_args.add_common_global_args(block, suppress_default=True)
     block.add_argument("--task-id", required=True)
     block.add_argument("--reason", required=True)
 
     cancel = sub.add_parser("cancel", help="Cancel an open task.")
+    common_cli_args.add_common_global_args(cancel, suppress_default=True)
     cancel.add_argument("--task-id", required=True)
     cancel.add_argument("--reason", required=True)
 
     reject = sub.add_parser("reject", help="Reject an approval-waiting task.")
+    common_cli_args.add_common_global_args(reject, suppress_default=True)
     reject.add_argument("--task-id", required=True)
     reject.add_argument("--reason", required=True)
 
-    sub.add_parser("status", help="Print queue status.")
+    status = sub.add_parser("status", help="Print queue status.")
+    common_cli_args.add_common_global_args(status, suppress_default=True)
 
     heartbeat = sub.add_parser("heartbeat", help="Print a periodic queue heartbeat.")
+    common_cli_args.add_common_global_args(heartbeat, suppress_default=True)
 
     validate = sub.add_parser("validate", help="Validate queue invariants.")
+    common_cli_args.add_common_global_args(validate, suppress_default=True)
     validate.add_argument("--current-task-tracking")
     validate.add_argument("--trace-id")
     validate.add_argument("--require-current", action="store_true")
