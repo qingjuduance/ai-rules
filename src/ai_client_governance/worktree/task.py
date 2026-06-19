@@ -2455,7 +2455,159 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("--force", action="store_true", help="Remove even if dirty.")
     remove.add_argument("--execute", action="store_true", help="Actually remove the worktree. Default is dry-run.")
     
+    # describe-schema
+    describe = subparsers.add_parser("describe-schema", help="Print worktree conventions: enums, fields, paths, and commands (so agents don't have to read Python source).")
+    describe.add_argument("--format", choices=["text", "json"], default="text", help="Output format. Default: text.")
+    describe.add_argument("--sample", action="store_true", help="Print a sample minimal status JSON payload.")
+    describe.add_argument("--list-active", action="store_true", help="Also list active task worktrees (runs status and annotates).")
+
     return parser
+
+
+def command_describe_schema(args: argparse.Namespace) -> int:
+    """Print the worktree schema descriptor."""
+    descriptor = build_worktree_schema_descriptor()
+    if args.sample:
+        sample = {
+            "note": "Sample worktree snapshot payload matching worktree-task status output.",
+            "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task status --record-state --format json",
+            "ai_client_governance": {
+                "main_branch": "main",
+                "main_head_at_snapshot": "abc1234",
+                "main_status": "clean",
+                "main_worktree": ".ai-client/ai-client-governance",
+                "target_ref": "main",
+                "task_worktrees": [
+                    {
+                        "path": ".ai-client/project/.worktree/20260619-time-gate-hardening",
+                        "absolute_path": "D:/root/file/resume/self/.ai-client/project/.worktree/20260619-time-gate-hardening",
+                        "branch": "task/20260619-time-gate-hardening",
+                        "base_commit": "abc1234",
+                        "head_at_snapshot": "def5678",
+                        "status": "clean",
+                        "dirty": False,
+                        "commit_status": "committed",
+                        "merged_status": "not_merged",
+                        "lock_reason": "",
+                        "repo": "ai-client-governance",
+                        "task_slug": "20260619-time-gate-hardening",
+                        "target_ref": "main",
+                        "last_commit_message": "time-gate: add time_utils.py + created_at/updated_at for 4 tables + v1->v2 migration",
+                        "creation_method": "worktree-task",
+                        "source_repo": ".ai-client/ai-client-governance",
+                    }
+                ],
+            },
+            "self": {
+                "main_branch": "main",
+                "main_head_at_snapshot": "7c2bd39f",
+                "main_status": "dirty",
+                "main_worktree": ".",
+                "target_ref": "main",
+                "task_worktrees": [],
+            },
+            "schema_version": descriptor["schema_version"],
+            "last_updated": descriptor["_now"],
+        }
+        print(json.dumps(sample, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.format == "json":
+        print(json.dumps(descriptor, ensure_ascii=False, indent=2))
+    else:
+        lines: list[str] = []
+        lines.append("worktree-task schema")
+        lines.append("=" * 40)
+        lines.append(f"schema_version: {descriptor['schema_version']}")
+        lines.append("")
+        lines.append("CONVENTIONS (where things live)")
+        lines.append("-" * 40)
+        for key, value in descriptor["conventions"].items():
+            lines.append(f"{key}: {value}")
+        lines.append("")
+        lines.append("ENUMS")
+        lines.append("-" * 40)
+        for key, values in descriptor["enums"].items():
+            lines.append(f"{key}: {', '.join(values)}")
+        lines.append("")
+        lines.append("STATUS FIELDS (per task worktree)")
+        lines.append("-" * 40)
+        for field in descriptor["status_fields"]:
+            lines.append(f"  - {field['name']:25s}  {field['type']}")
+            lines.append(f"      {field['description']}")
+        lines.append("")
+        lines.append("COMMANDS")
+        lines.append("-" * 40)
+        for cmd in descriptor["commands"]:
+            lines.append(f"  {cmd['name']:20s}  {cmd['description']}")
+        print("\n".join(lines))
+    return 0
+
+
+def build_worktree_schema_descriptor() -> dict[str, Any]:
+    """Build a JSON-serializable descriptor of worktree conventions."""
+    from datetime import datetime, timezone as tz
+
+    now = datetime.now(tz.utc).astimezone().isoformat(timespec="seconds")
+
+    conventions: dict[str, str] = {
+        "task_worktree_dir": ".ai-client/project/.worktree/<task-slug>/",
+        "task_worktree_repo_dir_ai_client_gov": "<project-root>/.ai-client/ai-client-governance/",
+        "task_worktree_repo_dir_self": "<project-root>/",
+        "branch_name_template": "task/<YYYYMMDD>-<slug>",
+        "status_record_file": ".ai-client/project/state/aicg.db",
+        "standard_entry_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task <command>",
+    }
+
+    enums: dict[str, list[str]] = {
+        "repo": ["self", "ai-client-governance"],
+        "creation_method": ["worktree-task", "break-glass", "external"],
+        "main_status": ["clean", "dirty"],
+        "worktree_status": ["clean", "dirty"],
+        "merged_status": ["not_merged", "merged"],
+        "commit_status": ["not_committed", "committed"],
+    }
+
+    status_fields: list[dict[str, str]] = [
+        {"name": "path", "type": "string", "description": "Project-relative path to the worktree directory."},
+        {"name": "absolute_path", "type": "string", "description": "Absolute path to the worktree directory."},
+        {"name": "branch", "type": "string", "description": "Git branch name inside the worktree."},
+        {"name": "base_commit", "type": "string", "description": "Base commit at create time."},
+        {"name": "head_at_snapshot", "type": "string", "description": "HEAD at snapshot time."},
+        {"name": "status", "type": "enum<worktree_status>", "description": "Git status summary inside the worktree."},
+        {"name": "dirty", "type": "bool", "description": "True when the worktree has uncommitted changes."},
+        {"name": "commit_status", "type": "enum<commit_status>", "description": "Whether the worktree has at least one commit that hasn't been merged back."},
+        {"name": "merged_status", "type": "enum<merged_status>", "description": "Whether the worktree branch has been merged into the target ref."},
+        {"name": "lock_reason", "type": "string", "description": "Reason a worktree is locked, if any."},
+        {"name": "repo", "type": "enum<repo>", "description": "Source repository: self or ai-client-governance."},
+        {"name": "task_slug", "type": "string", "description": "Stable slug used in worktree path and branch."},
+        {"name": "target_ref", "type": "string", "description": "Branch the task branch will merge into."},
+        {"name": "last_commit_message", "type": "string", "description": "Short summary of the worktree's latest commit."},
+        {"name": "creation_method", "type": "enum<creation_method>", "description": "worktree-task, break-glass, or external."},
+        {"name": "source_repo", "type": "string", "description": "Source repository path."},
+    ]
+
+    commands: list[dict[str, str]] = [
+        {"name": "worktree-task create", "description": "Create a new task worktree using the standard path."},
+        {"name": "worktree-task status --record-state", "description": "Record a live-state snapshot of all task worktrees."},
+        {"name": "worktree-task reconcile --strict", "description": "Reconcile coord/session metadata against Git live worktree state."},
+        {"name": "worktree-task merge --execute", "description": "Merge a clean worktree branch into target_ref."},
+        {"name": "worktree-task finalize", "description": "Gate checking merged status and remaining worktrees."},
+        {"name": "worktree-task host-closeout --repo ai-client-governance", "description": "Verify host gitlink/state/tracking after merging an embedded repo task worktree."},
+        {"name": "worktree-task remove --execute", "description": "Remove a task worktree directory after merge."},
+        {"name": "worktree-task cleanup-branch --execute", "description": "Delete a merged task branch after its worktree is removed."},
+        {"name": "worktree-task describe-schema", "description": "Print this schema document."},
+        {"name": "worktree-task describe-schema --sample", "description": "Print a sample minimal snapshot payload."},
+    ]
+
+    return {
+        "schema_version": 1,
+        "conventions": conventions,
+        "enums": enums,
+        "status_fields": status_fields,
+        "commands": commands,
+        "_now": now,
+    }
 
 
 def main() -> int:
@@ -2484,7 +2636,9 @@ def main() -> int:
         return command_cleanup_branch(args)
     if args.command == "remove":
         return command_remove(args)
-    
+    if args.command == "describe-schema":
+        return command_describe_schema(args)
+
     return 1
 
 

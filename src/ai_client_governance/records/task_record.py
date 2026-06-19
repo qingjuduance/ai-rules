@@ -107,6 +107,11 @@ def parse_args() -> argparse.Namespace:
     status = sub.add_parser("status", help="Print database summary.")
     common_cli_args.add_common_global_args(status, suppress_default=True)
     status.add_argument("--task-id", help="Optional task id.")
+
+    describe = sub.add_parser("describe", help="Print the task-record schema: tables, fields, enums, and a sample JSON payload.")
+    common_cli_args.add_common_global_args(describe, suppress_default=True)
+    describe.add_argument("--format", choices=("json", "text"), default="json", help="Output format. Default: json.")
+    describe.add_argument("--sample", action="store_true", help="Print a minimal valid sample payload for task-record apply.")
     return parser.parse_args()
 
 
@@ -338,6 +343,333 @@ def _ensure_time_columns(con: sqlite3.Connection) -> None:
         (str(SCHEMA_VERSION),),
     )
     con.commit()
+
+
+# ======================================================================
+# Schema descriptor: table columns, enums, required fields
+# ======================================================================
+
+# (table, enum_name, enum_tuple) — 用于 describe 输出
+_ENUM_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
+    ("tasks", "status", TASK_STATUSES),
+    ("tasks", "task_types", tuple(sorted(KNOWN_TASK_TYPES))),
+    ("requirements", "status", REQUIREMENT_STATUSES),
+    ("outputs", "output_type", OUTPUT_TYPES),
+    ("validations", "result", VALIDATION_RESULTS),
+    ("approvals", "status", APPROVAL_STATUSES),
+    ("worktrees", "repo", WORKTREE_REPOS),
+    ("worktrees", "creation_method", WORKTREE_CREATION_METHODS),
+    ("worktrees", "status", WORKTREE_STATUSES),
+    ("worktrees", "merged_status", WORKTREE_MERGE_STATUSES),
+    ("worktrees", "commit_status", WORKTREE_COMMIT_STATUSES),
+    ("worktrees", "push_status", WORKTREE_PUSH_STATUSES),
+    ("gate_runs", "result", GATE_RESULTS),
+]
+
+# Top-level JSON payload tables, in required-then-optional order.
+# (table, required, [columns...])
+# 列取自 rows_from_payload + schema SQL。
+_PAYLOAD_TABLE_LAYOUT: dict[str, list[tuple[str, str, str]]] = {
+    "task": [
+        ("task_id", "string", "Primary key. Required. Stable identifier referenced by gates, triggers, outputs, etc."),
+        ("title", "string", "Human-readable task title. Required."),
+        ("status", "enum<TASK_STATUSES>", "Lifecycle state. Required."),
+        ("task_size", "string", "small|medium|large. Defaults to medium."),
+        ("task_types", "array<string>", "Gate routing. Subset of code-debug|correction|docs|frontend|git|long-running|multi-agent|resume|rules-script. Required."),
+        ("summary", "string", "Short task summary. Optional."),
+        ("approval_label", "string", "Required when file changes need explicit approval."),
+        ("trace_id", "string", "Optional trace id shared across rows from the same run."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+        ("updated_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "approvals": [
+        ("approval_id", "string", "Stable approval row id; generated when omitted."),
+        ("label", "string", "Approval label. Required for rules-script tasks."),
+        ("status", "enum<APPROVAL_STATUSES>", "requested|approved|rejected. Required."),
+        ("summary", "string", "Optional summary of what was approved / rejected."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "requirements": [
+        ("requirement_id", "string", "Stable id; generated when omitted."),
+        ("summary", "string", "Human-readable requirement summary. Required."),
+        ("record_decision", "string", "include|omit|defer. Required."),
+        ("network_decision", "string", "not-required|required|deferred. Required."),
+        ("validation_decision", "string", "syntax-only|gate-only|full|skipped. Required."),
+        ("acceptance", "string", "Success criteria for this requirement. Required."),
+        ("status", "enum<REQUIREMENT_STATUSES>", "open|in_progress|done|blocked|deferred|cancelled. Required."),
+        ("action", "string", "What we will do to satisfy this requirement. Required."),
+        ("implementation_evidence", "string", "Files/commands/evidence produced for this requirement. Required."),
+        ("validation_evidence", "string", "Evidence of validation. Required."),
+        ("final_coverage", "string", "Coverage notes for this requirement. Required."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+        ("updated_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "triggers": [
+        ("trigger_id", "string", "Stable id; generated when omitted."),
+        ("trigger_type", "string", "input-filter|user-message|command-compression|scope-classification|gate|etc. Required."),
+        ("source", "string", "Where this trigger originated. Required."),
+        ("matched_requirement", "string", "Requirement id(s) this trigger matches. Required."),
+        ("priority", "string", "high|medium|low. Required."),
+        ("applicability_scope", "string", "Scope this trigger applies to. Required."),
+        ("scope_expansion", "string", "Scope expansion notes. Required."),
+        ("reason", "string", "Why this trigger applies. Required."),
+        ("required_action", "string", "Action required by the trigger. Required."),
+        ("executed_steps", "string", "Steps executed. Required."),
+        ("quantitative_evidence", "string", "Numbers: commands, files, timings. Required."),
+        ("status", "string", "fired|pending|blocked. Required."),
+        ("trace_id", "string", "Trace id shared across related rows. Required."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+        ("updated_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "outputs": [
+        ("output_id", "string", "Stable id; generated when omitted."),
+        ("output_type", "enum<OUTPUT_TYPES>", "plan|status|final|script|error|git_worktree. Required."),
+        ("applicability_scope", "string", "Scope covered. Required."),
+        ("exclusions", "string", "What is excluded. Required even if empty string."),
+        ("objects", "string", "What objects/files changed. Required."),
+        ("fact_source", "string", "Source of facts. Required."),
+        ("completed", "string", "Completed items summary. Required."),
+        ("unfinished", "string", "Unfinished items. Required even if empty string."),
+        ("unverified", "string", "Unverified items. Required even if empty string."),
+        ("blocked", "string", "Blocked items. Required even if empty string."),
+        ("user_confirmation", "string", "Confirmation requested from user. Required even if empty string."),
+        ("final_coverage", "string", "Final coverage summary. Required."),
+        ("trace_id", "string", "Trace id. Required even if empty string."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+        ("updated_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "worktrees": [
+        ("worktree_id", "string", "Stable id; generated when omitted."),
+        ("repo", "enum<WORKTREE_REPOS>", "self|ai-client-governance|other. Required."),
+        ("source_repo", "string", "Source repository path. Required."),
+        ("path", "string", "Worktree path (relative to project root). Required."),
+        ("branch", "string", "Task branch name. Required."),
+        ("base_commit", "string", "Base commit hash or reference. Required."),
+        ("creation_method", "enum<WORKTREE_CREATION_METHODS>", "worktree-task|break-glass|external. Required."),
+        ("sparse_policy", "string", "Sparse checkout policy. Required even if 'none'."),
+        ("source_handling", "string", "How source code is handled in the worktree. Required."),
+        ("status", "enum<WORKTREE_STATUSES>", "active|done|blocked|removed. Required."),
+        ("merged_status", "enum<WORKTREE_MERGE_STATUSES>", "not_merged|merged|not_required. Required."),
+        ("commit_status", "enum<WORKTREE_COMMIT_STATUSES>", "not_committed|committed|not_required. Required."),
+        ("push_status", "enum<WORKTREE_PUSH_STATUSES>", "not_pushed|pushed|not_required. Required."),
+        ("next_action", "string", "Next action for this worktree. Required even if empty string."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+        ("updated_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "validations": [
+        ("validation_id", "string", "Stable id; generated when omitted."),
+        ("command", "string", "Command executed. Required."),
+        ("cwd", "string", "Working directory of the command. Required."),
+        ("result", "enum<VALIDATION_RESULTS>", "pass|fail|warn|skipped. Required."),
+        ("summary", "string", "Summary of what was validated. Required."),
+        ("evidence", "string", "Optional evidence text."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+    "events": [
+        ("event_id", "string", "Stable id; generated when omitted."),
+        ("event_type", "string", "Dot-separated event type: client-identity.analysis, plan-approval-boundary.analysis, command-compression.analysis, scope-classification.analysis, user-claim-validation.analysis, state-artifact-ownership.analysis, patch-preflight.analysis, etc. Required."),
+        ("payload", "object", "Free-form JSON object. Required even if empty object {}. Written into the DB as JSON text."),
+        ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
+    ],
+}
+
+
+def build_schema_descriptor() -> dict[str, Any]:
+    """Return a dict describing the full task-record schema.
+
+    Enums are listed explicitly so callers don't need to read Python source.
+    """
+    enums: dict[str, list[str]] = {
+        "TASK_STATUSES": list(TASK_STATUSES),
+        "REQUIREMENT_STATUSES": list(REQUIREMENT_STATUSES),
+        "OUTPUT_TYPES": list(OUTPUT_TYPES),
+        "VALIDATION_RESULTS": list(VALIDATION_RESULTS),
+        "APPROVAL_STATUSES": list(APPROVAL_STATUSES),
+        "WORKTREE_REPOS": list(WORKTREE_REPOS),
+        "WORKTREE_CREATION_METHODS": list(WORKTREE_CREATION_METHODS),
+        "WORKTREE_STATUSES": list(WORKTREE_STATUSES),
+        "WORKTREE_MERGE_STATUSES": list(WORKTREE_MERGE_STATUSES),
+        "WORKTREE_COMMIT_STATUSES": list(WORKTREE_COMMIT_STATUSES),
+        "WORKTREE_PUSH_STATUSES": list(WORKTREE_PUSH_STATUSES),
+        "GATE_RESULTS": list(GATE_RESULTS),
+        "KNOWN_TASK_TYPES": list(sorted(KNOWN_TASK_TYPES)),
+    }
+
+    tables: dict[str, list[dict[str, str]]] = {}
+    for table_name, columns in _PAYLOAD_TABLE_LAYOUT.items():
+        tables[table_name] = [
+            {"name": name, "type": col_type, "description": desc}
+            for name, col_type, desc in columns
+        ]
+
+    enum_usage: list[dict[str, str]] = []
+    for table, field, values in _ENUM_REGISTRY:
+        enum_usage.append({"table": table, "field": field, "enum": values[0].upper() + "S"})
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "tables": tables,
+        "enums": enums,
+        "enum_usage": enum_usage,
+    }
+
+
+def build_sample_payload() -> dict[str, Any]:
+    """Return a minimal valid payload usable with `task-record apply`."""
+    now = utc_now()
+    return {
+        "task": {
+            "task_id": "TASK-20260619-SAMPLE",
+            "title": "Sample structured task record",
+            "status": "active",
+            "task_size": "small",
+            "task_types": ["rules-script"],
+            "summary": "Demonstrates a minimal valid payload.",
+            "approval_label": "sample-approval",
+            "trace_id": "sample-trace-001",
+            "created_at": now,
+            "updated_at": now,
+        },
+        "approvals": [
+            {
+                "approval_id": "APV-001",
+                "label": "sample-approval",
+                "status": "approved",
+                "summary": "Approved for schema demonstration purposes only.",
+                "created_at": now,
+            }
+        ],
+        "requirements": [
+            {
+                "requirement_id": "REQ-001",
+                "summary": "Sample requirement summary.",
+                "record_decision": "include",
+                "network_decision": "not-required",
+                "validation_decision": "syntax-only",
+                "acceptance": "Schema validation succeeds; apply succeeds.",
+                "status": "open",
+                "action": "Run task-record apply and verify no errors.",
+                "implementation_evidence": "task_record.py rows_from_payload + apply_payload.",
+                "validation_evidence": "n/a for sample.",
+                "final_coverage": "All rows written successfully.",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "triggers": [
+            {
+                "trigger_id": "TRG-001",
+                "trigger_type": "input-filter",
+                "source": "sample",
+                "matched_requirement": "REQ-001",
+                "priority": "medium",
+                "applicability_scope": "demonstration",
+                "scope_expansion": "none",
+                "reason": "Demonstration payload.",
+                "required_action": "run task-record apply",
+                "executed_steps": "task-record apply --json sample.json",
+                "quantitative_evidence": "1 task, 1 requirement row",
+                "status": "fired",
+                "trace_id": "sample-trace-001",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "outputs": [
+            {
+                "output_id": "OUT-001",
+                "output_type": "final",
+                "applicability_scope": "demonstration",
+                "exclusions": "none",
+                "objects": "schema description",
+                "fact_source": "task_record.py _PAYLOAD_TABLE_LAYOUT",
+                "completed": "sample payload built",
+                "unfinished": "none",
+                "unverified": "none",
+                "blocked": "none",
+                "user_confirmation": "none",
+                "final_coverage": "sample payload covers all required tables",
+                "trace_id": "sample-trace-001",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "worktrees": [
+            {
+                "worktree_id": "WT-001",
+                "repo": "ai-client-governance",
+                "source_repo": ".ai-client/ai-client-governance",
+                "path": ".ai-client/project/.worktree/20260619-sample",
+                "branch": "task/20260619-sample",
+                "base_commit": "HEAD",
+                "creation_method": "worktree-task",
+                "sparse_policy": "none",
+                "source_handling": "in-worktree",
+                "status": "active",
+                "merged_status": "not_merged",
+                "commit_status": "not_committed",
+                "push_status": "not_pushed",
+                "next_action": "verify sample then discard",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "validations": [
+            {
+                "validation_id": "VAL-001",
+                "command": "python -c \"import ast; ast.parse(open('src/ai_client_governance/records/task_record.py').read())\"",
+                "cwd": ".ai-client/ai-client-governance",
+                "result": "skipped",
+                "summary": "Sample validation placeholder.",
+                "evidence": "",
+                "created_at": now,
+            }
+        ],
+        "events": [
+            {
+                "event_id": "EVT-001",
+                "event_type": "sample-event.analysis",
+                "payload": {"note": "Sample event payload."},
+                "created_at": now,
+            }
+        ],
+    }
+
+
+def format_text_descriptor(descriptor: dict[str, Any]) -> str:
+    """Human-readable text output from a schema descriptor."""
+    lines: list[str] = []
+    lines.append("task-record schema")
+    lines.append("=" * 40)
+    lines.append(f"schema_version: {descriptor['schema_version']}")
+    lines.append("")
+
+    # Enums first — these are the "gotcha" values callers need to know.
+    lines.append("ENUMS")
+    lines.append("-" * 40)
+    for name, values in sorted(descriptor["enums"].items()):
+        lines.append(f"{name}: {', '.join(values)}")
+    lines.append("")
+
+    # Per-table field lists.
+    for table_name, columns in descriptor["tables"].items():
+        lines.append(f"TABLE: {table_name}")
+        lines.append("-" * 40)
+        for col in columns:
+            lines.append(f"  - {col['name']:30s}  {col['type']}")
+            lines.append(f"      {col['description']}")
+        lines.append("")
+
+    lines.append("COMMANDS")
+    lines.append("-" * 40)
+    lines.append("  task-record describe                          (print this document)")
+    lines.append("  task-record describe --sample                 (print a valid sample JSON payload)")
+    lines.append("  task-record init                              (create or migrate the SQLite DB)")
+    lines.append("  task-record apply --json <file> [--replace]   (validate + write a structured task)")
+    lines.append("  task-record gate --task-id <id> [--event final]")
+    lines.append("  task-record status [--task-id <id>]")
+    lines.append("  task-record export-md --task-id <id> [--output <file>]")
+    return "\n".join(lines)
 
 
 def require_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -1195,6 +1527,18 @@ def main() -> int:
     path = db_path(root, args.db)
 
     try:
+        if args.command == "describe":
+            if args.sample:
+                payload = build_sample_payload()
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                descriptor = build_schema_descriptor()
+                if args.format == "json":
+                    print(json.dumps(descriptor, ensure_ascii=False, indent=2))
+                else:
+                    print(format_text_descriptor(descriptor))
+            return 0
+
         if args.command == "status":
             if not path.exists():
                 summary = empty_summary(path, args.task_id)
