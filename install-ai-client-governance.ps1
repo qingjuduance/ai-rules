@@ -103,7 +103,8 @@ function Test-DedicatedAiClientAdapterPath {
         $normalized -eq ".windsurf/rules/ai-client-governance.md" -or
         $normalized -eq ".continue/rules/ai-client-governance.md" -or
         $normalized -eq ".roo/rules/ai-client-governance.md" -or
-        $normalized -eq ".trae/rules/ai-client-governance.md"
+        $normalized -eq ".trae/rules/ai-client-governance.md" -or
+        $normalized -eq ".codebuddy/rules/ai-client-governance/RULE.mdc"
     )
 }
 
@@ -514,6 +515,41 @@ function Get-CursorAdapterContent {
     return ($lines -join [Environment]::NewLine)
 }
 
+function Get-CodeBuddyAdapterContent {
+    $lines = @(
+        '---',
+        'description: AI Client Governance thin adapter for CodeBuddy',
+        'alwaysApply: true',
+        'enabled: true',
+        '---',
+        '',
+        '# CodeBuddy AI Client Governance Adapter',
+        '',
+        'This file is a thin adapter for CodeBuddy. It should not duplicate',
+        'the full common rules. Before working in this project, read:',
+        '',
+        '1. `AGENTS.md` if it exists in the project root (CodeBuddy auto-loads it when `CODEBUDDY.md` is absent).',
+        '2. `.ai-client/ai-client-governance/AGENTS.md`.',
+        '3. `.ai-client/project/rules/project/AGENTS.md`.',
+        '',
+        'If `.ai-client/ai-client-governance/` is missing, read `.ai-client/ai-client-governance-config.json`,',
+        'locate the configured ai-client-governance repository, embed it at `.ai-client/ai-client-governance/`,',
+        'then restart the read order.',
+        '',
+        'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` or an equivalent wrapper at',
+        'the start of a new session. Warn until the embedded ai-client-governance repository is',
+        'synchronized. Do not pull or push automatically.',
+        '',
+        'When running lifecycle or telemetry commands, record the current client/model identity:',
+        '`client_type=codebuddy` and `model_id=<current model>`;',
+        'if unavailable, use explicit `unknown` values instead of omitting them.',
+        '',
+        'Existing project-owned native instructions stay authoritative. Do not write',
+        'project-specific rules back to the common ai-client-governance repository.'
+    )
+    return ($lines -join [Environment]::NewLine)
+}
+
 function Get-GitHubInstructionsContent {
     $lines = @(
         '---',
@@ -543,6 +579,7 @@ function Get-AgentAdapterFiles {
         [pscustomobject]@{ RelativePath = ".continue\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Continue") },
         [pscustomobject]@{ RelativePath = ".roo\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Roo Code") },
         [pscustomobject]@{ RelativePath = ".trae\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Trae") },
+        [pscustomobject]@{ RelativePath = ".codebuddy\rules\ai-client-governance\RULE.mdc"; Content = (Get-CodeBuddyAdapterContent) },
         [pscustomobject]@{ RelativePath = "CONVENTIONS.md"; Content = (Get-GenericAdapterContent -ToolName "Aider") }
     )
 }
@@ -897,7 +934,7 @@ else {
         Write-Host "Agent adapters: $($agentAdapters -join ', ')"
     }
     else {
-        Write-Host "Agent adapters: skipped by default. Rerun with -InstallAgentAdapters to create Claude/Gemini/Copilot/Cursor/Trae/etc. thin adapters."
+        Write-Host "Agent adapters: skipped by default. Rerun with -InstallAgentAdapters to create Claude/Gemini/Copilot/Cursor/Trae/CodeBuddy/etc. thin adapters."
     }
     if (-not $NoBackup) {
         Write-Host "Changed generated files, if any, were backed up under $backupRoot"

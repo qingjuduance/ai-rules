@@ -65,7 +65,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、
   `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、
   `.clinerules/`、`.windsurf/rules/*.md`、`.continue/rules/`、`.roo/rules/`、
-  `.trae/rules/*.md` 和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
+  `.trae/rules/*.md`、`.codebuddy/rules/*/RULE.mdc`（CodeBuddy；无 `CODEBUDDY.md`
+  时根 `AGENTS.md` 会被自动加载）和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
 - `ai-client-governance` 的通用规则事实源是嵌入式
   `.ai-client/ai-client-governance/AGENTS.md`；旧 `.codex/ai-client-governance/`
   不是迁移期路径，也不是 fallback。这里的 `AGENTS.md` 是入口适配文件名，

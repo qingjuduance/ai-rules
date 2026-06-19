@@ -387,6 +387,16 @@
       "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
     },
     {
+      "tool": "codebuddy",
+      "paths": [
+        ".codebuddy/rules/ai-client-governance/RULE.mdc"
+      ],
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters",
+      "nativeCompatNote": "CodeBuddy auto-loads root AGENTS.md when CODEBUDDY.md is absent; this adapter is the dedicated .codebuddy/rules entry. RULE.mdc uses YAML frontmatter (description, alwaysApply, enabled)."
+    },
+    {
       "tool": "aider",
       "paths": [
         "CONVENTIONS.md"
@@ -530,7 +540,8 @@
     ".windsurf/rules/ai-client-governance.md",
     ".continue/rules/ai-client-governance.md",
     ".roo/rules/ai-client-governance.md",
-    ".trae/rules/ai-client-governance.md"
+    ".trae/rules/ai-client-governance.md",
+    ".codebuddy/rules/ai-client-governance/RULE.mdc"
   ],
   "installer": {
     "script": "install-ai-client-governance.ps1",
@@ -580,6 +591,7 @@
     ".continue/rules/",
     ".roo/rules/",
     ".trae/rules/",
+    ".codebuddy/rules/",
     ".ai-client/project/rules/project/",
     ".ai-client/project/skills/",
     ".ai-client/project/records/task-tracking/",
