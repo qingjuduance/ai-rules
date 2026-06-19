@@ -53,6 +53,7 @@ MUTATING_TASK_TYPES = {
 }
 KNOWN_TASK_TYPES = set(MUTATING_TASK_TYPES)
 INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
+ANALYSIS_CONTRACT_EVENT = "analysis-contract.preflight"
 CLIENT_IDENTITY_EVENT = "client-identity.analysis"
 INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
 INPUT_FILTER_REQUIREMENT_FIELDS = (
@@ -1665,6 +1666,49 @@ def validate_shell_proxy_usage(
         add(notes, "note", f"shell proxy usage facts present: {SHELL_PROXY_USAGE_EVENT}", "events")
 
 
+def validate_analysis_contract_preflight(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require analysis contract facts before write-intent for modifying or medium/large tasks."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    payloads = event_payloads(con, task["task_id"], ANALYSIS_CONTRACT_EVENT)
+    if not payloads:
+        add(errors, "error", f"analysis contract requires event_type={ANALYSIS_CONTRACT_EVENT}", "events")
+        return
+    required_fields = {"analysis_summary", "scope", "non_goals", "risks", "acceptance"}
+    valid = False
+    missing_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        present = {k for k in required_fields if str(payload.get(k, "")).strip()}
+        missing = required_fields - present
+        if missing:
+            missing_event_ids.append(f"{event_id}:missing={','.join(sorted(missing))}")
+            continue
+        contract_fields = {k: str(payload.get(k, "")).strip() for k in required_fields}
+        if any(not v for v in contract_fields.values()):
+            missing_event_ids.append(f"{event_id}:empty_values")
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            f"analysis contract must include summary, scope, non-goals, risks, and acceptance",
+            "events",
+            ", ".join(missing_event_ids) if missing_event_ids else "no payloads",
+        )
+    else:
+        add(notes, "note", f"analysis contract facts present: {ANALYSIS_CONTRACT_EVENT}", "events")
+
+
 def validate_history_requirement_recovery(
     con: sqlite3.Connection,
     task: sqlite3.Row,
@@ -1908,6 +1952,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_readonly_side_effect_policy(con, task, task_types, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
     validate_agent_dispatch_brief(con, task, task_types, errors, notes)
+    validate_analysis_contract_preflight(con, task, task_types, event, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}
