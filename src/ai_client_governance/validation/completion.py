@@ -42,6 +42,7 @@ class PlannedCheck:
     required: bool = True
     estimated_seconds: int = 5
     cost: str = "cheap"
+    actual_duration_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -358,6 +359,7 @@ def planned_check_dict(check: PlannedCheck) -> dict[str, object]:
         "estimated_seconds": check.estimated_seconds,
         "cost": check.cost,
         "reason": check.reason,
+        "actual_duration_ms": check.actual_duration_ms,
     }
 
 
@@ -374,6 +376,40 @@ def build_validation_attribution(
     required = sorted((check for check in checks if check.required), key=lambda item: item.estimated_seconds, reverse=True)
     optional = sorted((check for check in checks if not check.required), key=lambda item: item.estimated_seconds, reverse=True)
     actual = actual_validation_spans(root, task_id, trace_id, db_override, top)
+    # Match actual spans to planned checks by id/subject keyword for duration attribution
+    actual_by_name: dict[str, int] = {}
+    for span in actual:
+        name = str(span.get("name") or "").lower()
+        subj = str(span.get("subject") or "").lower()
+        duration = int(span.get("duration_ms") or 0)
+        if name:
+            actual_by_name[name] = max(actual_by_name.get(name, 0), duration)
+        if subj:
+            actual_by_name[subj] = max(actual_by_name.get(subj, 0), duration)
+    def match_duration(check: PlannedCheck) -> int | None:
+        check_id = check.id.lower()
+        check_cmd = check.command.lower()
+        for key, duration in actual_by_name.items():
+            if check_id in key or check_id in check_cmd and key in check_cmd:
+                return duration
+            # Match common keywords: py-compile, validate-encoding, selftest, gate-pool
+            for keyword in [check_id, check_id.replace("-", "")]:
+                if keyword and keyword in key:
+                    return duration
+        return None
+    enriched_checks: list[PlannedCheck] = []
+    for check in checks:
+        matched = match_duration(check)
+        if matched is not None:
+            enriched_checks.append(PlannedCheck(
+                id=check.id, command=check.command, reason=check.reason,
+                required=check.required, estimated_seconds=check.estimated_seconds,
+                cost=check.cost, actual_duration_ms=matched,
+            ))
+        else:
+            enriched_checks.append(check)
+    required = sorted((c for c in enriched_checks if c.required), key=lambda item: item.estimated_seconds, reverse=True)
+    optional = sorted((c for c in enriched_checks if not c.required), key=lambda item: item.estimated_seconds, reverse=True)
     pressure_ratio = budget.estimated_required_seconds / budget.budget_seconds if budget.budget_seconds else 0
     if budget.blocked_by_budget:
         pressure = "blocked"
@@ -401,6 +437,18 @@ def build_validation_attribution(
         recommendations.append("optimize or cache the slowest actual validation spans before adding more checks")
     else:
         recommendations.append("run validations through gate-pool/task-run/tool-invocations so duration_ms evidence exists")
+    # Redundancy detection: check for duplicated subjects across validation spans
+    redundant_hints: list[str] = []
+    seen_subjects: dict[str, int] = {}
+    for span in actual:
+        subj = str(span.get("subject", span.get("name", "")) or "")
+        if subj:
+            seen_subjects[subj] = seen_subjects.get(subj, 0) + 1
+    for subj, count in seen_subjects.items():
+        if count > 1:
+            redundant_hints.append(f"{subj} checked {count}x")
+    if redundant_hints:
+        recommendations.append("redundant checks: " + ", ".join(redundant_hints[:5]))
     return ValidationAttribution(
         planned_slowest_required=[planned_check_dict(check) for check in required[:top]],
         planned_slowest_optional=[planned_check_dict(check) for check in optional[:top]],
@@ -531,6 +579,13 @@ def main() -> int:
         print(f"- budget pressure: {validation_attribution.budget_pressure}")
         for item in validation_attribution.likely_bottlenecks:
             print(f"- bottleneck: {item}")
+        print("Slowest planned checks (by estimated_seconds):")
+        for check in validation_attribution.planned_slowest_required[:3]:
+            print(f"  - {check['id']}: ~{check['estimated_seconds']}s [{check['cost']}]")
+        if validation_attribution.actual_slowest_validation_spans:
+            print("Slowest actual validation spans (by duration_ms):")
+            for span in validation_attribution.actual_slowest_validation_spans[:3]:
+                print(f"  - {span.get('name', '?')}: {span.get('duration_ms', '?')}ms")
         for item in validation_attribution.recommendations:
             print(f"- recommendation: {item}")
         print("Completion test plan:")
