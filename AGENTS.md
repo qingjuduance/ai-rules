@@ -197,6 +197,80 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 如果未来自建 agent runner，可以把本节节点映射到 LangGraph 等 workflow 引擎；
   在现有客户端中，`runtime components` 只是 `ai-client-governance` 插件内部的治理节点注册表，
   不能假设它能拦截客户端内部所有行为。
+- 客户端运行时治理的目标模型是“能力网关”，不是事后散文检查器。宿主客户端的
+  文件写入、shell 执行、Todo 同步、审批捕获、子 AI 派发和最终回复必须逐步收束到
+  `file-write-adapter`、`shell-exec-adapter`、`todo-adapter`、
+  `approval-adapter`、`agent-dispatch-adapter` 和 `final-output-adapter`。
+  每个 adapter 都必须有 schema 化输入、policy 决策和结构化结果，事件语义至少覆盖
+  `capability.requested`、`capability.policy_decided`、
+  `capability.executed`、`capability.blocked` 和 `capability.exception`。
+- 能力网关分三层：Capability Adapter 层负责把宿主能力调用转成结构化 intent；
+  Policy Gateway 层只查询 `.ai-client/project/state/aicg.db` 中的 task、worktree、
+  approval、path ownership、agent decision、readonly side-effect 和 capability facts；
+  Evidence/Gate 层把每次调用写成 OpenTelemetry-style span/event/attributes，并用
+  task id、trace id、span id 串联到 final gate。最终回复不能再只问“是否遵守规则”，
+  而要查对应 capability facts、telemetry、失败传播和 break-glass 记录是否存在。
+- 能力网关设计借鉴但不照搬外部规范：MCP Tools 的 `name`、schema 和 call result
+  适合作为 adapter 输入/输出形态；MCP 安全建议中的授权、审计和敏感操作保护
+  适合作为 policy gateway 约束；OpenTelemetry trace span/event/attributes 和
+  W3C Trace Context 适合作为 evidence 和 trace 传播模型；VS Code command/workspace API
+  只说明客户端/扩展层可以包装能力调用，不能作为系统级强制拦截的依据。
+- host-native 集成的边界必须保守：允许在 Codex、Trae、Claude Code、VS Code 扩展或
+  MCP server 等客户端插件层包装 AI 发起的能力调用；禁止为了追求“100% 拦截”去修改
+  用户电脑的全局 shell、环境变量、profile、注册表、PATH、执行策略、后台服务或系统命令。
+  如果宿主客户端不提供调用前拦截能力，必须承认 raw capability gap，并通过 adapter
+  wrapper、final gate、telemetry 和 explicit exception 暴露风险；不能用污染用户环境换强制。
+- 客户端能力网关交给 Trae 或其它宿主客户端实现前，必须先按以下规格落地方案，不能把
+  本段当作已经完成的 runtime 能力：
+  - adapter contract：每个 adapter 的输入输出必须有稳定 schema，至少包含
+    `capability_type`、`adapter_name`、`client_type`、`model_id`、`task_id`、
+    `trace_id`、`span_id`、`worktree_path`、`scope_kind`、`requested_subject`、
+    `policy_decision`、`approval_label`、`result_status`、`telemetry_id`、
+    `raw_gap` 和 `exception_reason`。路径、命令和敏感参数记录摘要或规范化字段，
+    不把密钥、完整私密文件内容或用户 profile 内容写入 telemetry。
+  - policy gateway：adapter 执行前只查询结构化事实，判断 active/ready task、审批范围、
+    worktree 归属、允许写入路径、readonly side-effect、子 AI 决策、shell broker 要求、
+    break-glass 标签和 final gate 需求。缺少关键事实时默认 fail closed；需要继续时
+    只能走明确的 approval 或 raw capability gap 记录。
+  - file-write-adapter：治理所有 AI 发起的写入意图，包括 patch、格式化器、生成导出、
+    批量重写和子 AI 返回的文件变更。允许路径必须落在当前任务 worktree 或已批准的
+    project/runtime artifact 范围；主工作区、通用仓库外路径、用户 home、profile、
+    state DB 和 ignored runtime 目录都必须有单独 policy 结论。
+  - shell-exec-adapter：AI command intent 只能进入 command broker，再由 broker 选择
+    PowerShell no-profile proxy、bash proxy、cmd proxy 或受控工具执行器。Trae 若能控制
+    AI shell tool 的注册入口，应把 raw shell tool 隐藏或替换为 broker tool；若 Trae
+    无法覆盖某条宿主执行路径，必须在 capability facts 中写 `raw_gap=true`，不得宣称
+    host-native 100% coverage。
+  - todo-adapter：Todo UI 只是 task queue 的投影。新增、完成、取消和重排 Todo 必须回写
+    task queue 或记录只读投影来源；不能让 UI 勾选状态替代 task lifecycle。
+  - approval-adapter：审批必须结构化记录 `approval.requested`、`approval.granted`、
+    `approval.scope`、`approval.label`、`approval.excludes_push`、有效期和覆盖路径。
+    聊天里的“可以”只能被绑定到当前 task/phase/scope，不能自动扩展到 push、全局安装或
+    系统环境修改。
+  - agent-dispatch-adapter：子 AI 派发必须有 task id、读写范围、forbidden paths、
+    context reuse 决策、validation command、return capsule 和 merge evidence。决定不派发
+    子 AI 时，也要记录 no_spawn_reason、替代验证和剩余风险。
+  - final-output-adapter：最终回复前必须查询 capability facts，而不是询问模型自述。
+    对修改型任务，缺少 file-write、shell、approval、validation、worktree、Git 和 raw gap
+    事实时不能声称已完成；只能报告未闭环项、未合并/未提交/未 push 状态和下一步。
+  - non-invasive shell coverage：实现只能在 AI 发起命令的客户端/插件/tool-call 层拦截；
+    不拦截用户手动终端，不安装全局 shim，不写 profile，不改注册表/PATH/执行策略，不替换
+    系统 shell，不常驻后台服务。PowerShell 执行只允许 per-command 子进程、`-NoProfile`、
+    `-NonInteractive`、process-scoped env 和任务临时脚本；复杂命令必须走 UTF-8 command file。
+  - 分阶段交付：第一阶段先做 schema、DB facts、shell broker wrapper 和 final gate 查询；
+    第二阶段接入 file-write/todo/approval/agent/final adapters；第三阶段接宿主客户端
+    原生 tool registry 或 extension API，替换 AI 可见的 raw capability；第四阶段补
+    coverage diagnostics、before/after 环境快照和异常报告。任何阶段都不能以修改用户电脑
+    环境换取覆盖率。
+  - 验收标准：必须有正向测试证明 adapter 写入 facts、policy 阻断越界写入/未审批 shell、
+    多命令失败传播、final gate 缺 facts fail closed；必须有负向测试证明实现没有修改
+    `$PROFILE`、用户/机器 `PATH`、注册表、CurrentUser/LocalMachine execution policy、
+    系统 shell 可执行文件、计划任务或服务；必须有覆盖报告区分 host-native coverage、
+    broker coverage、telemetry-wrapped compensation 和 raw capability gap。
+  - 资料依据：MCP Tools schema/call result 可作为 tool contract 参考，MCP security best
+    practices 可作为授权和审计参考，OpenTelemetry trace span/event/attributes 与
+    W3C Trace Context 可作为证据模型参考，VS Code command/workspace API 只能证明扩展层可
+    包装能力调用，不能证明系统级强制拦截。
 - 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
   要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
 - 用户输入是强制 `user-message` join point。非纯只读小问答在计划、写入、恢复或最终
@@ -294,8 +368,16 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `shell-adapter` 会写入 SQLite telemetry，并在事件中记录 `adapter_enforcement`、
   `scope_kind`、`scope_reason` 和 task id。Windows PowerShell 强制代理必须使用
   no-profile command proxy：临时脚本、`-NoProfile`、不写用户 `$PROFILE`。
+  raw shell enforcement 必须是 non-invasive、per-command、process-scoped：
+  不修改系统或用户 `PATH`，不改 PowerShell profile，不执行 `Set-ExecutionPolicy`
+  的 `CurrentUser` 或 `LocalMachine` 范围，不改注册表，不安装全局 shim/hook，
+  不替换 `powershell.exe`/`pwsh.exe`，不常驻后台服务，不接管用户手动打开的终端。
+  允许的执行方式只是在 AI 发起命令时启动临时 `-NoProfile`、`-NonInteractive`
+  子进程，并将环境变量、执行策略和临时脚本限制在当前进程或当前任务临时目录中。
+  Microsoft PowerShell 文档中的 `-NoProfile` 和 execution policy `Process` scope
+  只能作为进程级隔离依据，不能被解释为允许修改用户级或机器级环境。
   `shell-adapter profile-snippet` 或 `shell-adapter install-powershell --execute`
-  只属于用户显式批准的 profile shim，不得作为默认强制方案。收口诊断必须区分
+  只属于用户显式批准的可撤销 profile shim，不得作为默认强制方案。收口诊断必须区分
   shell-adapter auto-intercept、no-profile command proxy、shell-adapter telemetry、
   telemetry-wrapped command 和 raw shell gap；需要强制覆盖时使用
   `task-run diagnose --require-raw-shell-coverage` 或

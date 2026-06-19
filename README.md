@@ -10,6 +10,7 @@
 | 通用规则事实源 | `.ai-client/ai-client-governance/AGENTS.md`，文件名只是入口适配，内容是 agent-neutral 治理契约。 |
 | 项目规则入口 | 目标项目 `.ai-client/project/rules/project/AGENTS.md` |
 | 结构化事实源 | `.ai-client/project/state/aicg.db`；Markdown 只作为报告导出和历史审计。 |
+| 能力网关方案 | `AGENTS.md` 的“客户端治理插件与生命周期组件”章节，记录 file/shell/Todo/approval/agent/final adapters、non-invasive raw shell 边界和 Trae 实现验收标准。 |
 | 文件归属审计 | `file-ownership audit` 统计 `.ai-client` 追踪/忽略类别；安装器维护 `.gitignore` runtime block。 |
 | 入口适配器 | `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、Copilot/Cursor/Cline/Windsurf/Continue/Roo/Aider 等工具原生规则入口。 |
 | 机器清单 | `manifest.json` |
@@ -100,6 +101,10 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
   处理拦截器管审批/worktree/联网核对，输出拦截器管最终回复和 worktree 完成提示，
   横切门禁管编码、Git、文档、telemetry 和 trace flow。新增可确定约束时注册组件，
   不再只追加口头规则。
+- **客户端能力网关方案**：运行时治理的下一步收束到 file-write、shell-exec、Todo、
+  approval、agent-dispatch 和 final-output adapters。raw shell 覆盖只允许客户端/插件层、
+  per-command、process-scoped 的非侵入实现；宿主不提供拦截能力时必须记录 gap，
+  不能污染用户电脑环境来换取覆盖率。
 - **门禁池和执行链路**：`ai_client_governance.py gate-pool` 可以按同一 `trace_id` 编排多个
   门禁，`ai_client_governance.py telemetry` 负责统一记录/统计，`tool-invocations`
   作为命令适配器，`ai_client_governance.py tool-flow` 验证调用链路。
