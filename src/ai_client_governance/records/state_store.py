@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from ai_client_governance.common.time_utils import now_iso as utc_now
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +19,6 @@ from ai_client_governance.common.paths import STRUCTURED_DB_PATH
 
 STATE_SCHEMA_VERSION = 1
 STATE_DB_ENV = "AICG_STATE_DB"
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def db_path(root: Path, override: str | None = None) -> Path:

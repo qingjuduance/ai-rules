@@ -19,7 +19,8 @@ import uuid
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from ai_client_governance.common.time_utils import now_iso
 from pathlib import Path
 from typing import Any
 
@@ -77,10 +78,6 @@ ALLOWED_TRANSITIONS = {
 class Finding:
     level: str
     message: str
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def parse_args() -> argparse.Namespace:

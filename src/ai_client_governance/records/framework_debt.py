@@ -12,7 +12,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from ai_client_governance.common.time_utils import now_iso
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +30,6 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def db_path(root: Path, override: str | None) -> Path:

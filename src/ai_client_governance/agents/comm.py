@@ -13,6 +13,7 @@ import argparse
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from ai_client_governance.common.time_utils import now_iso as utc_now, parse_dt as parse_time
 from pathlib import Path
 from typing import Any
 
@@ -24,24 +25,8 @@ LOCKS_FILE = BASE_DIR / "locks.json"
 SCHEMA_VERSION = 1
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-
-
 def now_datetime() -> datetime:
     return datetime.now(timezone.utc).astimezone()
-
-
-def parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 def parse_json(value: str | None, default: Any) -> Any:

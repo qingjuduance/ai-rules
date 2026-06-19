@@ -18,6 +18,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from ai_client_governance.common.time_utils import now_iso, parse_dt
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -53,26 +54,6 @@ class Invocation:
     final_gate: bool
     summary: str
     raw: dict[str, Any]
-
-
-def now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        return None
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
-        normalized = normalized + "T00:00:00"
-    result = datetime.fromisoformat(normalized)
-    if result.tzinfo is None:
-        result = result.replace(tzinfo=timezone.utc)
-    return result
 
 
 def ensure_list(value: list[str] | None) -> list[str]:

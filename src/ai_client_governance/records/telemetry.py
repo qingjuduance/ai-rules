@@ -13,6 +13,7 @@ import sys
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from ai_client_governance.common.time_utils import now_iso as utc_now, parse_dt
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -151,29 +152,6 @@ def env_for_child(
     if context.tracestate:
         child["TRACESTATE"] = context.tracestate
     return child
-
-
-def parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    normalized = str(value).strip()
-    if not normalized:
-        return None
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
-        normalized = normalized + "T00:00:00"
-    try:
-        result = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if result.tzinfo is None:
-        result = result.replace(tzinfo=timezone.utc)
-    return result
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def host_project_root(root: Path) -> Path:

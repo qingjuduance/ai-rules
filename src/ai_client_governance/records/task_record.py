@@ -15,6 +15,7 @@ import sys
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from ai_client_governance.common.time_utils import now_iso as utc_now
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ from ai_client_governance.common.paths import STRUCTURED_DB_PATH
 from ai_client_governance.runtime.scope import COMMON_SCOPE, MIXED_SCOPE, NATIVE_SCOPE, PROJECT_SCOPE, UNKNOWN_SCOPE
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 TASK_STATUSES = ("candidate", "awaiting_approval", "ready", "active", "verifying", "done", "blocked", "cancelled")
 REQUIREMENT_STATUSES = ("open", "in_progress", "done", "blocked", "deferred", "cancelled")
@@ -77,10 +78,6 @@ class GateReport:
     notes: list[Finding]
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage structured AI Client Governance task records.")
     # Register common globals at both levels so either option order survives.
@@ -129,6 +126,7 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     init_db(con)
+    _ensure_time_columns(con)
     return con
 
 
@@ -190,7 +188,9 @@ def init_db(con: sqlite3.Connection) -> None:
             action TEXT NOT NULL CHECK (length(trim(action)) > 0),
             implementation_evidence TEXT NOT NULL CHECK (length(trim(implementation_evidence)) > 0),
             validation_evidence TEXT NOT NULL CHECK (length(trim(validation_evidence)) > 0),
-            final_coverage TEXT NOT NULL CHECK (length(trim(final_coverage)) > 0)
+            final_coverage TEXT NOT NULL CHECK (length(trim(final_coverage)) > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS triggers (
@@ -207,7 +207,9 @@ def init_db(con: sqlite3.Connection) -> None:
             executed_steps TEXT NOT NULL CHECK (length(trim(executed_steps)) > 0),
             quantitative_evidence TEXT NOT NULL CHECK (length(trim(quantitative_evidence)) > 0),
             status TEXT NOT NULL CHECK (length(trim(status)) > 0),
-            trace_id TEXT NOT NULL CHECK (length(trim(trace_id)) > 0)
+            trace_id TEXT NOT NULL CHECK (length(trim(trace_id)) > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS outputs (
@@ -224,7 +226,9 @@ def init_db(con: sqlite3.Connection) -> None:
             blocked TEXT NOT NULL CHECK (length(trim(blocked)) > 0),
             user_confirmation TEXT NOT NULL CHECK (length(trim(user_confirmation)) > 0),
             final_coverage TEXT NOT NULL CHECK (length(trim(final_coverage)) > 0),
-            trace_id TEXT NOT NULL CHECK (length(trim(trace_id)) > 0)
+            trace_id TEXT NOT NULL CHECK (length(trim(trace_id)) > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS worktrees (
@@ -242,7 +246,9 @@ def init_db(con: sqlite3.Connection) -> None:
             merged_status TEXT NOT NULL CHECK (merged_status IN ({quote_enum(WORKTREE_MERGE_STATUSES)})),
             commit_status TEXT NOT NULL CHECK (commit_status IN ({quote_enum(WORKTREE_COMMIT_STATUSES)})),
             push_status TEXT NOT NULL CHECK (push_status IN ({quote_enum(WORKTREE_PUSH_STATUSES)})),
-            next_action TEXT NOT NULL CHECK (length(trim(next_action)) > 0)
+            next_action TEXT NOT NULL CHECK (length(trim(next_action)) > 0),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS validations (
@@ -275,6 +281,57 @@ def init_db(con: sqlite3.Connection) -> None:
         );
         """
     )
+    con.execute(
+        "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (str(SCHEMA_VERSION),),
+    )
+    con.commit()
+
+
+def _ensure_time_columns(con: sqlite3.Connection) -> None:
+    """补齐旧数据库的时间字段 (v1 -> v2 迁移)。
+
+    新数据库由 ``init_db`` 直接生成带列的 schema；历史 v1 数据库
+    可能缺少 requirements/triggers/outputs/worktrees 表的
+    ``created_at`` / ``updated_at``，本函数以幂等方式补齐。
+    """
+    current_version = 0
+    try:
+        con.execute("SELECT value FROM meta WHERE key = 'schema_version'")
+        row = con.execute(
+            "SELECT value FROM meta WHERE key = 'schema_version'"
+        ).fetchone()
+        if row is not None:
+            try:
+                current_version = int(row[0])
+            except (TypeError, ValueError):
+                current_version = 0
+    except sqlite3.OperationalError:
+        current_version = 0
+
+    if current_version >= 2:
+        return
+
+    now = utc_now()
+    migrations = (
+        ("requirements", ("created_at", "updated_at")),
+        ("triggers", ("created_at", "updated_at")),
+        ("outputs", ("created_at", "updated_at")),
+        ("worktrees", ("created_at", "updated_at")),
+    )
+    for table, columns in migrations:
+        for column in columns:
+            try:
+                con.execute(
+                    f"SELECT {column} FROM {table} LIMIT 1"
+                )
+            except sqlite3.OperationalError:
+                # ALTER TABLE DEFAULT 不支持 ? 占位符，用 SQLite 字面量
+                escaped_now = now.replace("'", "''")
+                con.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT '{escaped_now}'"
+                )
     con.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -385,6 +442,8 @@ def rows_from_payload(task_id: str, payload: dict[str, Any]) -> dict[str, list[d
                 "implementation_evidence": clean_text(req.get("implementation_evidence"), "requirements[].implementation_evidence"),
                 "validation_evidence": clean_text(req.get("validation_evidence"), "requirements[].validation_evidence"),
                 "final_coverage": clean_text(req.get("final_coverage"), "requirements[].final_coverage"),
+                "created_at": clean_text(req.get("created_at", now), "requirements[].created_at"),
+                "updated_at": clean_text(req.get("updated_at", now), "requirements[].updated_at"),
             }
         )
 
@@ -406,6 +465,8 @@ def rows_from_payload(task_id: str, payload: dict[str, Any]) -> dict[str, list[d
                 "quantitative_evidence": clean_text(trigger.get("quantitative_evidence"), "triggers[].quantitative_evidence"),
                 "status": clean_text(trigger.get("status"), "triggers[].status"),
                 "trace_id": clean_text(trigger.get("trace_id"), "triggers[].trace_id"),
+                "created_at": clean_text(trigger.get("created_at", now), "triggers[].created_at"),
+                "updated_at": clean_text(trigger.get("updated_at", now), "triggers[].updated_at"),
             }
         )
 
@@ -427,6 +488,8 @@ def rows_from_payload(task_id: str, payload: dict[str, Any]) -> dict[str, list[d
                 "user_confirmation": clean_text(output.get("user_confirmation"), "outputs[].user_confirmation"),
                 "final_coverage": clean_text(output.get("final_coverage"), "outputs[].final_coverage"),
                 "trace_id": clean_text(output.get("trace_id"), "outputs[].trace_id"),
+                "created_at": clean_text(output.get("created_at", now), "outputs[].created_at"),
+                "updated_at": clean_text(output.get("updated_at", now), "outputs[].updated_at"),
             }
         )
 
@@ -449,6 +512,8 @@ def rows_from_payload(task_id: str, payload: dict[str, Any]) -> dict[str, list[d
                 "commit_status": enum_text(wt.get("commit_status"), "worktrees[].commit_status", WORKTREE_COMMIT_STATUSES),
                 "push_status": enum_text(wt.get("push_status"), "worktrees[].push_status", WORKTREE_PUSH_STATUSES),
                 "next_action": clean_text(wt.get("next_action"), "worktrees[].next_action"),
+                "created_at": clean_text(wt.get("created_at", now), "worktrees[].created_at"),
+                "updated_at": clean_text(wt.get("updated_at", now), "worktrees[].updated_at"),
             }
         )
 
@@ -1143,6 +1208,8 @@ def main() -> int:
         con = connect(path, create=create_db)
         if create_db:
             init_db(con)
+        else:
+            _ensure_time_columns(con)
 
         if args.command == "init":
             result = {"db": str(path), "schema_version": SCHEMA_VERSION}
