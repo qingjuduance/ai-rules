@@ -149,7 +149,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   8. `completion-test` 和任务特定验证：按 changed paths、任务类型和验收标准跑 focused
      checks，预算不足时拆任务或升级预算。
   9. `final-output` / `task-record gate --event final`：检查 REQ 覆盖、发现问题记录、
-     worktree/Git/validation/telemetry/adapter facts 和输出边界。
+     worktree/Git/validation/telemetry/adapter facts 和输出边界；multi-agent 任务还必须
+     有验收 AI 对执行 AI task id 的结构化通过/不通过结论。
   10. `worktree-task finalize` / `closeout-all` / `host-closeout`：只有用户明确要求合并、
       清理或 push 时进入对应链路；否则最终回复必须报告未合并、未 push 和保留原因。
   11. `task-queue transition --to done`：只有 task record 存在、final gate 通过且 live
@@ -164,11 +165,93 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   生命周期：方案作为 design package 写入 task record，至少包含问题、目标、非目标、
   架构、数据模型、policy/gate、迁移/清理、验证计划、风险、implementation tasks、
   reviewer acceptance criteria 和 handoff capsule。执行 AI 必须读取 design package，
-  验收 AI 必须用独立 validation facts 和 live state 核对；不能只凭上一位 AI 的总结验收。
+  验收 AI 必须用独立 validation facts、live state 和通过/不通过结论核对；不能只凭上一位 AI 的总结验收。
+- 验收 AI 必须按执行 AI 的 task id 或 leaf id 判断当前是否通过，记录
+  `agent-review-result.analysis` 或等价结构化事实：至少包含 reviewer agent、executor agent、
+  reviewed task id、pass/fail 结论、生命周期事实核对、提交状态核对、未处理项、处理不佳项、
+  证据、整改建议和复测计划。
+  生命周期事实核对必须读取结构化事实和 Git live state，至少覆盖 task queue lifecycle、
+  task record status、requirements/triggers/outputs/worktrees/validations/events 行数和状态、
+  final gate、worktree 路径、分支、HEAD、dirty 状态、commit/merge/push 状态、验证结果、
+  telemetry/raw shell gap 和 active/pending 状态。缺任一关键事实或发现记录状态与 live state
+  冲突时，结论必须为不通过或阻塞，不能只凭执行 AI 总结判断完成。
+  结论为不通过、存在未解释的未处理项或整改复测未通过时，不能进入 merge/closeout，也不能把
+  root task 标记为 done；只能退回执行 AI、登记 follow-up task 或记录阻塞。
+  在 `task-record gate`、`worktree-task closeout-all` 和 `host-closeout` 尚未实现自动检查前，
+  该要求必须标为 `design_only` 并登记后续实现任务，不能声称机器门禁已经强制生效。
 - 设计包、执行任务和验收任务要用同一个 root task 或明确 parent/child 关系连接
   `tasks`、`requirements`、`framework-debt`、`corrections` 和 worktree rows。
   不再把大量临时字段塞进 agent brief 或 AGENTS 散文；agent brief 只保存最小上下文、
   scope、禁止路径、return capsule 和验证命令，结构化事实归 DB。
+
+## 任务执行子生命周期
+
+任务从 `active` 到 `done` 的执行阶段，每一步都必须有结构化证据：
+
+1. **worktree 就绪**：确认 worktree 已创建、分支正确、Git 状态 clean。多 worktree
+   并行前必须写入冲突矩阵：写范围不重叠可并行，重叠时通过 `worktree-coord` 记录锁。
+2. **命令压缩分析**：中/大型或修改型任务必须先运行 `command-compression.analysis`，
+   去重、合并、标记只读/并行/顺序组。小型修改不能跳过此节点。
+3. **命令执行治理入口**：
+   - 只读和验证命令通过 `task-run run` 或 `gate-pool` 的可并行组执行，支持缓存。
+   - 状态变更、Git 写入、锁和 task-record 写入必须顺序执行且不可缓存。
+   - 所有命令必须通过 `shell-adapter proxy-powershell` 代理，禁止裸 shell。
+   - 每次调用写入 `execution_spans`/`execution_events` telemetry。
+4. **文件修改前后**：
+   - 修改前运行 `lifecycle preflight`（分析契约、approval、scope、shell proxy 等）。
+   - 修改后运行 `policy assess` 检查安全风险、`patch-preflight.analysis` 确认锚点唯一。
+   - 每步失败必须写入 `command-error.analysis` 事件，不能只在对话里记录。
+5. **验证执行**：按 `completion-test` 规划的检查项运行，区分 fast/full profile。
+   验证结果写入 `validations` 表，每条至少包含 command、cwd、result、summary。
+6. **commit 收束**：Git stage/commit 必须通过 `task-run run` 或 `tool-invocations run`
+   治理链路；裸 git 命令只作为 break-glass 并记录 `raw_git_write_exception.analysis`。
+   commit 在 worktree 分支上，不自动合并到 main。
+7. **状态刷新**：每次修改后刷新 task record 中的 worktree 状态行、HEAD（`*_at_snapshot`
+   语义）、dirty 状态；`worktree-task reconcile --strict` 做 live-state 对账。
+8. **post-change 文档影响**：功能/脚本/规则修改后必须进入文档影响面节点，判断是否需同步
+   README、manifest、引用记录；不影响的写明 no-impact 理由。
+
+## 任务检查子生命周期
+
+任务从 `candidate` 到 `done` 的每个门禁检查点，任意一个 fail closed 即阻塞：
+
+1. **input-filter.preflight**：非纯只读小问答必须记录逐 REQ 行、触发器、
+   client/model identity、user-claim-validation、agent-decision、
+   data-confirmation 和 shell-proxy-usage 事实。
+2. **task-record gate --event preflight**：验证 tasks/requirements/triggers/outputs/events
+   表完整；中/大型或修改型任务缺以下任意事件则 fail closed：
+   `command-compression.analysis`、`scope-classification`、
+   `plan-approval-boundary.analysis`、`analysis-contract.preflight`
+   （含 summary/scope/non-goals/risks/acceptance）、`patch-preflight.analysis`
+   （规则/脚本/docs/correction 任务）。
+3. **task-record gate --event final**：验证 output 类型完整、requirements 全部关闭、
+   worktree 证据存在、validations 至少一条 pass、rules-script 有 approval、
+   docs 有 validate-doc/doc-index、resume 有 PDF 检查。
+4. **task-gate**：按实际命中的任务类型（code-debug/correction/rules-script/docs/git/
+   frontend/resume/multi-agent/long-running）执行对应门禁，缺证据即 fail。
+5. **session-gate**：会话收口门禁，检查 task-gate 已通过、task record 存在、
+   worktree 已复核、telemetry 覆盖、raw shell gap 已记录或补偿。
+6. **completion-test**：按 changed paths 和任务类型规划验证检查项，fast profile 预算
+   90s、full profile 预算 600s；预算不足时拆任务或升级。慢检查归因和冗余检测写入
+   `validation_attribution`。
+7. **telemetry 归因**：`telemetry report` 输出 top operations、slowest spans、
+   cache hit/miss、重复 subject、adapter enforcement 分布；`task-run diagnose`
+   暴露失败 telemetry、重复命令、missing worktree session 和 raw shell gap。
+8. **live gate 收口**：`worktree-task finalize --require-merged --require-no-task-worktrees`
+   确认无残留 worktree；`file-ownership audit --strict` 确认 live-state 未被 Git 追踪；
+   宿主 closeout 检查 submodule gitlink、task tracking 和宿主脏改动。
+
+### 执行链路的门禁覆盖矩阵
+
+| 生命周期阶段 | 执行子生命周期 | 检查子生命周期 |
+|-------------|---------------|---------------|
+| 输入 | — | input-filter.preflight |
+| 入队审批 | — | task-queue transition |
+| 规划写入前 | worktree 就绪、命令压缩 | task-record gate preflight、analysis-contract |
+| 执行中 | task-run/shell-adapter/修改 | policy assess、patch-preflight |
+| 验证 | completion-test 规划执行 | completion-test 输出、validations |
+| commit | task-run 治理链路 | task-record gate final、task-gate |
+| 收口 | worktree closeout、状态刷新 | session-gate、telemetry、live gate |
 
 ## 会话同步
 
@@ -673,6 +756,16 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   Git/worktree 门禁、失败路径、成功路径、发现问题和修复复测。
 - `task-gate` 必须按矩阵行校验覆盖的 REQ、门禁、失败路径、成功路径和修复复测；
   一句话式“全面覆盖、失败成功均通过”不能替代矩阵。
+- 多 AI 执行链路还必须有 `## 子 AI 任务验收结论` 或等价结构化事实，由检查 AI 对每个
+  执行 AI 的 task id/leaf id 说明当前是否通过。结论必须说明哪些 REQ 未处理、
+  哪些处理质量不足、生命周期 facts 和提交状态是否闭合、依据是什么、应如何修改以及
+  复测命令或复核方式。结论为不通过、
+  缺少整改建议、缺少复测结果或仍有 P0/P1 问题时，禁止合并对应 worktree，
+  禁止 closeout-all，禁止把 root task transition 到 done。
+- 后续实现方案必须至少覆盖：`agent-review-result.analysis` schema 校验、runtime
+  component 注册、`task-record gate --event final` 对 multi-agent task id 的结论检查、
+  `worktree-task closeout-all`/`host-closeout` 合并前阻断、agent-groups/agent-comm 看板展示、
+  以及 pass/fail、自带整改建议、复测通过/失败路径的 selftest。
 
 ## Corrections 与规则自迭代
 
