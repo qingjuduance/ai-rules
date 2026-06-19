@@ -1580,11 +1580,12 @@ def default_components() -> list[ComponentDefinition]:
             metadata={
                 "reports": (
                     "profile/env adapter installation",
+                    "no-profile command proxy telemetry",
                     "adapter telemetry event count",
                     "fail-closed readiness",
                     "raw shell gap",
                 ),
-                "fact_source": ".ai-client/project/state/aicg.db plus optional PowerShell profile marker",
+                "fact_source": ".ai-client/project/state/aicg.db plus optional PowerShell profile marker; command proxy must not write user profiles",
             },
         ),
         component(
@@ -1709,7 +1710,7 @@ def default_components() -> list[ComponentDefinition]:
             "processing-interceptor",
             "preflight",
             211,
-            "Fail closed when a mutating task claims raw host shell coverage without shell-adapter auto-intercept evidence.",
+            "Fail closed when a mutating task claims raw host shell coverage without auto-intercept or command-proxy evidence.",
             task_types=(
                 "code-debug",
                 "correction",
@@ -1722,7 +1723,7 @@ def default_components() -> list[ComponentDefinition]:
             ),
             events=("write-intent", "after-change", "resume", "final-output"),
             requires_facts=("task_id", "execution_telemetry", "raw_shell_coverage_decision"),
-            produces_facts=("raw_shell_gap_status", "shell_adapter_auto_intercept", "telemetry_wrapped_commands"),
+            produces_facts=("raw_shell_gap_status", "shell_adapter_auto_intercept", "shell_command_proxy", "telemetry_wrapped_commands"),
             mechanism_label="ai_client_governance.py task-run diagnose --require-raw-shell-coverage",
             gate_label="ai_client_governance.py task-run diagnose --require-raw-shell-coverage",
             gate_step="raw-shell-coverage",
@@ -1731,14 +1732,16 @@ def default_components() -> list[ComponentDefinition]:
             dedupe_key="task_id:event:trace_id:raw-shell-coverage",
             condition=(
                 "Run when important local commands must prove shell coverage. "
-                "Task-run/tool telemetry can prove commands were wrapped, but only shell-adapter env/profile evidence closes the raw host shell gap."
+                "Task-run/tool telemetry can prove commands were wrapped, while shell-adapter env/profile evidence "
+                "or no-profile command-proxy telemetry closes the raw host shell gap for governed commands."
             ),
             performance_budget="read SQLite/JSONL telemetry and optional profile marker only; no command execution",
             dependencies=("preflight.interceptor.task-run-dag.mutating",),
             metadata={
                 "required_cli": "task-run diagnose --require-raw-shell-coverage",
                 "shell_adapter_cli": "shell-adapter diagnose --require-auto-intercept",
-                "wrapped_telemetry_policy": "counts as compensation evidence but does not clear raw_shell_gap",
+                "command_proxy_cli": "shell-adapter proxy-powershell",
+                "wrapped_telemetry_policy": "task-run/tool telemetry counts as compensation evidence; shell-adapter command-proxy telemetry clears raw_shell_gap for governed commands without touching user profiles",
             },
         ),
     ]
@@ -1888,6 +1891,7 @@ EXPECTED_RUNTIME_COMMAND_KEYS = {
     "taskRunDiagnose",
     "policyAssess",
     "shellAdapterDiagnose",
+    "shellAdapterProxyPowerShell",
     "agentCommRegister",
     "agentCommHeartbeat",
     "telemetryReport",

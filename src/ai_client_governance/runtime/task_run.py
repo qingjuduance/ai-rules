@@ -1124,6 +1124,8 @@ def filter_telemetry_events(
 
 SHELL_ADAPTER_MARKER_BEGIN = "# >>> ai-client-governance shell-adapter >>>"
 SHELL_ADAPTER_MARKER_END = "# <<< ai-client-governance shell-adapter <<<"
+POWERSHELL_PROXY_ENFORCEMENT = "powershell-command-proxy"
+POWERSHELL_PROXY_ENV = "AICG_COMMAND_PROXY"
 
 
 def is_shell_adapter_event(event: dict[str, Any]) -> bool:
@@ -1131,6 +1133,18 @@ def is_shell_adapter_event(event: dict[str, Any]) -> bool:
         event.get("event_type") == "shell-adapter"
         or event.get("source") == "ai_client_governance.py shell-adapter"
         or bool(event.get("shell_adapter"))
+    )
+
+
+def is_command_proxy_event(event: dict[str, Any]) -> bool:
+    shell_adapter = event.get("shell_adapter")
+    shell_payload = shell_adapter if isinstance(shell_adapter, dict) else {}
+    mode = str(shell_payload.get("mode") or "")
+    enforcement = str(event.get("adapter_enforcement") or "")
+    return (
+        mode == POWERSHELL_PROXY_ENFORCEMENT
+        or enforcement == POWERSHELL_PROXY_ENFORCEMENT
+        or str(shell_payload.get("command_proxy") or "") == "true"
     )
 
 
@@ -1229,10 +1243,14 @@ def build_diagnostics(
         if command and count > 1
     ]
     shell_adapter_events = [event for event in terminal_events if is_shell_adapter_event(event)]
+    command_proxy_events = [event for event in shell_adapter_events if is_command_proxy_event(event)]
     task_run_tool_events = [event for event in terminal_events if is_task_run_tool_event(event)]
     env_intercept_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
     profile_intercept_installed = profile_has_shell_adapter(profile_path)
     adapter_installed = env_intercept_installed or profile_intercept_installed
+    command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
+    command_proxy_ready = command_proxy_env or bool(command_proxy_events)
+    raw_shell_coverage_ready = adapter_installed or command_proxy_ready
     scope_kind_counts = Counter(str(event.get("scope_kind") or "unknown") for event in terminal_events)
     shell_adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in shell_adapter_events)
     task_run_tool_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in task_run_tool_events)
@@ -1273,6 +1291,22 @@ def build_diagnostics(
                 "enforcement_modes": dict(sorted(shell_adapter_modes.items())),
                 "latest_event": shell_adapter_events[-1] if shell_adapter_events else {},
             },
+            "shell_command_proxy": {
+                "supported_platforms": ["windows-powershell"],
+                "implemented_platforms": ["windows-powershell"],
+                "env_active": command_proxy_env,
+                "event_count": len(command_proxy_events),
+                "no_profile_event_count": len(
+                    [
+                        event
+                        for event in command_proxy_events
+                        if isinstance(event.get("shell_adapter"), dict)
+                        and event["shell_adapter"].get("profile_policy") == "no_profile"
+                    ]
+                ),
+                "latest_event": command_proxy_events[-1] if command_proxy_events else {},
+                "coverage_ready": command_proxy_ready,
+            },
             "task_run_tool_telemetry": {
                 "event_count": len(task_run_tool_events),
                 "enforcement_modes": dict(sorted(task_run_tool_modes.items())),
@@ -1282,15 +1316,16 @@ def build_diagnostics(
                 "installed": adapter_installed,
                 "event_count": len(shell_adapter_events),
                 "enforcement_modes": dict(sorted(shell_adapter_modes.items())),
-                "fail_closed_ready": adapter_installed,
+                "fail_closed_ready": raw_shell_coverage_ready,
                 "latest_event": shell_adapter_events[-1] if shell_adapter_events else {},
             },
             "raw_shell_auto_intercepted": adapter_installed,
+            "raw_shell_coverage_ready": raw_shell_coverage_ready,
             "raw_shell_gap": ""
-            if adapter_installed
+            if raw_shell_coverage_ready
             else (
                 "The host client shell is not automatically intercepted by ai-client-governance; "
-                "important commands should run through shell-adapter, task-run, gate-pool, or the command adapter."
+                "important commands should run through shell-adapter proxy-powershell, task-run, gate-pool, or the command adapter."
             ),
         },
         "records": record_alignment_summary(root, db, task_id=task_id),
@@ -1440,6 +1475,7 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
     filters = telemetry_report.get("filters", {})
     auto_intercept = telemetry_report.get("shell_adapter_auto_intercept", {})
     shell_adapter_telemetry = telemetry_report.get("shell_adapter_telemetry", {})
+    command_proxy = telemetry_report.get("shell_command_proxy", {})
     task_run_tool_telemetry = telemetry_report.get("task_run_tool_telemetry", {})
     coord = diagnostics.get("coordination", {})
     run = diagnostics.get("run", {})
@@ -1459,9 +1495,11 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Telemetry duplicate commands: {len(telemetry_report.get('duplicate_commands', []))}",
         f"Telemetry failures: {len(telemetry_report.get('failures', []))}",
         f"Raw shell auto intercepted: {telemetry_report.get('raw_shell_auto_intercepted')}",
+        f"Raw shell coverage ready: {telemetry_report.get('raw_shell_coverage_ready')}",
         f"Shell adapter auto intercept env: {auto_intercept.get('env_installed')}",
         f"Shell adapter auto intercept profile: {auto_intercept.get('profile_installed')}",
         f"Shell adapter telemetry events: {shell_adapter_telemetry.get('event_count', 0)}",
+        f"Shell command proxy events: {command_proxy.get('event_count', 0)}",
         f"Task-run/tool telemetry events: {task_run_tool_telemetry.get('event_count', 0)}",
         f"Scope kinds: {json.dumps(telemetry_report.get('scope_kind_counts', {}), ensure_ascii=False, sort_keys=True)}",
         f"Coord available: {coord.get('available')}",
@@ -1478,12 +1516,11 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
 
 def diagnose_requirement_failures(args: argparse.Namespace, diagnostics: dict[str, Any]) -> list[str]:
     telemetry_report = diagnostics.get("telemetry", {})
-    auto_intercept = telemetry_report.get("shell_adapter_auto_intercept", {})
     shell_adapter_telemetry = telemetry_report.get("shell_adapter_telemetry", {})
     task_run_tool_telemetry = telemetry_report.get("task_run_tool_telemetry", {})
     failures: list[str] = []
-    if getattr(args, "require_raw_shell_intercept", False) and not auto_intercept.get("installed"):
-        failures.append("raw-shell-auto-intercept")
+    if getattr(args, "require_raw_shell_intercept", False) and not telemetry_report.get("raw_shell_coverage_ready"):
+        failures.append("raw-shell-coverage")
     if getattr(args, "require_shell_adapter_telemetry", False) and not shell_adapter_telemetry.get("event_count"):
         failures.append("shell-adapter-telemetry")
     if getattr(args, "require_task_run_tool_telemetry", False) and not task_run_tool_telemetry.get("event_count"):
@@ -1560,7 +1597,7 @@ def parse_args() -> argparse.Namespace:
         "--require-raw-shell-coverage",
         dest="require_raw_shell_intercept",
         action="store_true",
-        help="Exit non-zero unless shell-adapter env/profile auto-intercept is installed.",
+        help="Exit non-zero unless raw shell coverage exists through env/profile auto-intercept or command proxy telemetry.",
     )
     diagnose.add_argument("--require-shell-adapter-telemetry", action="store_true", help="Exit non-zero unless shell-adapter telemetry evidence exists.")
     diagnose.add_argument("--require-task-run-tool-telemetry", action="store_true", help="Exit non-zero unless task-run or tool-invocations telemetry evidence exists.")

@@ -2869,7 +2869,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and int(task_run_tool_telemetry.get("event_count", 0)) >= 2
         and not raw_shell_auto_intercept.get("installed")
         and telemetry.get("raw_shell_gap")
-        and "raw-shell-auto-intercept" in raw_shell_require_output
+        and "raw-shell-coverage" in raw_shell_require_output
         and "mixed" in telemetry.get("scope_kind_counts", {})
         and "ai-client-governance-common" in str(latest_event.get("scope_reason", ""))
         and not telemetry.get("duplicate_commands")
@@ -3299,6 +3299,31 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
                 str(root),
                 "--jsonl-artifact-dir",
                 str(jsonl_artifact_dir),
+                "proxy-powershell",
+                "--task-id",
+                "SHELL-ADAPTER-PROXY-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--powershell-command",
+                "if ($env:AICG_COMMAND_PROXY) { exit 0 } else { exit 3 }",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "diagnose",
                 "--task-id",
                 "SHELL-ADAPTER-SELFTEST",
@@ -3308,6 +3333,47 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             cwd=root,
             env_root=root,
             unset_env=["AICG_SHELL_ADAPTER"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "diagnose",
+                "--task-id",
+                "SHELL-ADAPTER-PROXY-SELFTEST",
+                "--require-raw-shell-coverage",
+                "--require-command-proxy",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "diagnose",
+                "--root",
+                str(root),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
+                "--task-id",
+                "SHELL-ADAPTER-PROXY-SELFTEST",
+                "--require-raw-shell-coverage",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -3368,32 +3434,52 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
     ]
     run_output = commands[0].stdout + commands[0].stderr
     diagnose: dict[str, object] = {}
+    proxy_diagnose: dict[str, object] = {}
+    proxy_task_run_diagnose: dict[str, object] = {}
     try:
-        diagnose = json.loads(commands[1].stdout)
+        diagnose = json.loads(commands[2].stdout)
+    except json.JSONDecodeError:
+        pass
+    try:
+        proxy_diagnose = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    try:
+        proxy_task_run_diagnose = json.loads(commands[4].stdout)
     except json.JSONDecodeError:
         pass
     scope_counts = diagnose.get("scope_kind_counts", {}) if isinstance(diagnose.get("scope_kind_counts"), dict) else {}
     auto_intercept = diagnose.get("auto_intercept", {}) if isinstance(diagnose.get("auto_intercept"), dict) else {}
     telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
-    fail_closed_output = commands[3].stdout + commands[3].stderr
+    proxy = proxy_diagnose.get("command_proxy", {}) if isinstance(proxy_diagnose.get("command_proxy"), dict) else {}
+    proxy_task_run = (
+        proxy_task_run_diagnose.get("telemetry", {})
+        if isinstance(proxy_task_run_diagnose.get("telemetry"), dict)
+        else {}
+    )
+    fail_closed_output = commands[6].stdout + commands[6].stderr
     passed = (
-        all(command.exit_code == 0 for command in [commands[0], commands[1], commands[2], commands[4]])
-        and commands[3].exit_code != 0
+        all(command.exit_code == 0 for command in [commands[0], commands[1], commands[2], commands[3], commands[4], commands[5], commands[7]])
+        and commands[6].exit_code != 0
         and "\"status\": \"succeeded\"" in run_output
         and int(diagnose.get("event_count", 0)) >= 1
         and int(telemetry.get("event_count", 0)) >= 1
         and not auto_intercept.get("installed")
         and not diagnose.get("fail_closed_ready")
-        and "shell-adapter-auto-intercept" in fail_closed_output
+        and "shell-adapter-raw-shell-coverage" in fail_closed_output
+        and int(proxy.get("event_count", 0)) >= 1
+        and int(proxy.get("no_profile_event_count", 0)) >= 1
+        and proxy.get("coverage_ready")
+        and proxy_task_run.get("raw_shell_coverage_ready")
         and "ai-client-governance-common" in scope_counts
-        and "powershell-profile" in commands[4].stdout
-        and "execute_required" in commands[4].stdout
+        and "powershell-profile" in commands[7].stdout
+        and "execute_required" in commands[7].stdout
     )
     return TestResult(
         name="shell-adapter-scope-diagnostics",
         passed=passed,
         summary=(
-            "shell-adapter run writes scoped telemetry while fail-closed diagnose still requires auto-intercept"
+            "shell-adapter proxy-powershell writes no-profile command-proxy telemetry while plain run still fails raw shell coverage"
             if passed
             else "shell-adapter scoped telemetry diagnostics regression failed"
         ),

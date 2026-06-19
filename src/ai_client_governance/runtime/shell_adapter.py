@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
 import sys
 import time
+import tempfile
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -21,6 +23,8 @@ from ai_client_governance.runtime.scope import classify_scope
 
 ADAPTER_MARKER_BEGIN = "# >>> ai-client-governance shell-adapter >>>"
 ADAPTER_MARKER_END = "# <<< ai-client-governance shell-adapter <<<"
+POWERSHELL_PROXY_ENFORCEMENT = "powershell-command-proxy"
+POWERSHELL_PROXY_ENV = "AICG_COMMAND_PROXY"
 
 
 def now_iso() -> str:
@@ -29,6 +33,24 @@ def now_iso() -> str:
 
 def command_to_string(command: list[str]) -> str:
     return " ".join(command).strip()
+
+
+def powershell_executable(preferred: str | None = None) -> str:
+    if preferred:
+        return preferred
+    return "powershell" if os.name == "nt" else "pwsh"
+
+
+def is_command_proxy_event(event: dict[str, Any]) -> bool:
+    shell_adapter = event.get("shell_adapter")
+    shell_payload = shell_adapter if isinstance(shell_adapter, dict) else {}
+    mode = str(shell_payload.get("mode") or "")
+    enforcement = str(event.get("adapter_enforcement") or "")
+    return (
+        mode == POWERSHELL_PROXY_ENFORCEMENT
+        or enforcement == POWERSHELL_PROXY_ENFORCEMENT
+        or str(shell_payload.get("command_proxy") or "") == "true"
+    )
 
 
 def adapter_event(
@@ -72,9 +94,10 @@ def adapter_event(
         adapter_enforcement=args.adapter_enforcement or "shell-adapter",
         shell_adapter={
             "adapter": "ai_client_governance.py shell-adapter",
-            "mode": "run",
+            "mode": getattr(args, "adapter_mode", "run"),
             "cwd": str(cwd),
             "fail_policy": "fail_closed",
+            **getattr(args, "shell_adapter_extra", {}),
         },
     )
     event["source"] = "ai_client_governance.py shell-adapter"
@@ -83,7 +106,7 @@ def adapter_event(
 
 def command_vector(args: argparse.Namespace) -> tuple[list[str], str]:
     if args.powershell_command:
-        shell = args.powershell_exe or ("pwsh" if os.name != "nt" else "powershell")
+        shell = powershell_executable(args.powershell_exe)
         command = [shell, "-NoProfile", "-Command", args.powershell_command]
         return command, args.powershell_command
     command = list(args.command)
@@ -92,10 +115,93 @@ def command_vector(args: argparse.Namespace) -> tuple[list[str], str]:
     return command, command_to_string(command)
 
 
+def powershell_proxy_script() -> str:
+    return r"""
+$ErrorActionPreference = "Continue"
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {
+}
+$env:AICG_SHELL_ADAPTER = "powershell-command-proxy"
+$env:AICG_EXECUTION_TELEMETRY_ENFORCEMENT = "powershell-command-proxy"
+$env:AICG_COMMAND_PROXY = "powershell"
+if (-not $env:AICG_PROXY_COMMAND_B64) {
+    Write-Error "AICG_PROXY_COMMAND_B64 is required"
+    exit 2
+}
+try {
+    $bytes = [Convert]::FromBase64String($env:AICG_PROXY_COMMAND_B64)
+    $command = [System.Text.Encoding]::UTF8.GetString($bytes)
+    Invoke-Expression $command
+    if ($null -ne $global:LASTEXITCODE) {
+        exit $global:LASTEXITCODE
+    }
+    if (-not $?) {
+        exit 1
+    }
+    exit 0
+} catch {
+    Write-Error $_
+    exit 1
+}
+""".lstrip()
+
+
+def powershell_proxy_command(args: argparse.Namespace, command_text: str) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    if os.name != "nt" and not args.allow_non_windows:
+        raise RuntimeError("proxy-powershell is currently implemented for Windows PowerShell hosts only")
+    shell = powershell_executable(args.powershell_exe)
+    command_b64 = base64.b64encode(command_text.encode("utf-8")).decode("ascii")
+    extra_env = {
+        "AICG_PROXY_COMMAND_B64": command_b64,
+        POWERSHELL_PROXY_ENV: "powershell",
+        "AICG_SHELL_ADAPTER": POWERSHELL_PROXY_ENFORCEMENT,
+        "AICG_EXECUTION_TELEMETRY_ENFORCEMENT": POWERSHELL_PROXY_ENFORCEMENT,
+    }
+    metadata = {
+        "profile_policy": "no_profile",
+        "profile_touched": "false",
+        "platform": "windows" if os.name == "nt" else "non-windows-pwsh",
+        "shell_executable": shell,
+        "command_proxy": "true",
+    }
+    return [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"], extra_env, metadata
+
+
+def run_powershell_proxy(args: argparse.Namespace) -> int:
+    raw_command = list(args.command)
+    if raw_command and raw_command[0] == "--":
+        raw_command = raw_command[1:]
+    command = args.powershell_command or command_to_string(raw_command)
+    if not command:
+        print("shell-adapter proxy-powershell requires --powershell-command or a command after --", file=sys.stderr)
+        return 2
+    try:
+        base_command, proxy_env, proxy_metadata = powershell_proxy_command(args, command)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    with tempfile.TemporaryDirectory(prefix="aicg-shell-proxy-") as tmp:
+        script_path = Path(tmp) / "Invoke-AicgCommandProxy.ps1"
+        script_path.write_text(powershell_proxy_script(), encoding="utf-8", newline="\n")
+        args.command = [*base_command, "-File", str(script_path)]
+        args.powershell_command = ""
+        args.adapter_enforcement = POWERSHELL_PROXY_ENFORCEMENT
+        args.adapter_mode = POWERSHELL_PROXY_ENFORCEMENT
+        args.command_text_override = command
+        args.shell_adapter_extra = {
+            **proxy_metadata,
+            "temporary_script": str(script_path),
+        }
+        args.child_env_extra = proxy_env
+        return run_command(args)
+
+
 def run_command(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd().resolve()
     command, command_text = command_vector(args)
+    command_text = getattr(args, "command_text_override", "") or command_text
     if not command:
         print("shell-adapter run requires a command after -- or --powershell-command", file=sys.stderr)
         return 2
@@ -120,6 +226,7 @@ def run_command(args: argparse.Namespace) -> int:
     child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
     child_env["PYTHONIOENCODING"] = "utf-8"
     child_env["PYTHONUTF8"] = "1"
+    child_env.update(getattr(args, "child_env_extra", {}))
     start = time.monotonic()
     completed = subprocess.run(command, cwd=cwd, env=child_env)
     ended_at = now_iso()
@@ -235,6 +342,10 @@ def diagnose(args: argparse.Namespace) -> int:
     profile_installed = ADAPTER_MARKER_BEGIN in profile_text and ADAPTER_MARKER_END in profile_text
     env_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
     auto_intercept_ready = env_installed or profile_installed
+    command_proxy_events = [event for event in adapter_events if is_command_proxy_event(event)]
+    command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
+    command_proxy_ready = command_proxy_env or bool(command_proxy_events)
+    raw_shell_coverage_ready = auto_intercept_ready or command_proxy_ready
     scope_counts = Counter(str(event.get("scope_kind") or "unknown") for event in adapter_events)
     payload = {
         "adapter": "ai_client_governance.py shell-adapter",
@@ -249,19 +360,36 @@ def diagnose(args: argparse.Namespace) -> int:
             "env_installed": env_installed,
             "profile_installed": profile_installed,
         },
+        "command_proxy": {
+            "supported_platforms": ["windows-powershell"],
+            "implemented_platforms": ["windows-powershell"],
+            "env_active": command_proxy_env,
+            "event_count": len(command_proxy_events),
+            "no_profile_event_count": len(
+                [
+                    event
+                    for event in command_proxy_events
+                    if isinstance(event.get("shell_adapter"), dict)
+                    and event["shell_adapter"].get("profile_policy") == "no_profile"
+                ]
+            ),
+            "latest_event": command_proxy_events[-1] if command_proxy_events else {},
+            "coverage_ready": command_proxy_ready,
+        },
         "telemetry": {
             "event_count": len(adapter_events),
             "latest_event": adapter_events[-1] if adapter_events else {},
         },
-        "fail_closed_ready": auto_intercept_ready,
+        "raw_shell_coverage_ready": raw_shell_coverage_ready,
+        "fail_closed_ready": raw_shell_coverage_ready,
     }
     requirement_failures: list[str] = []
-    if (
-        args.require_adapter
-        or args.require_fail_closed
-        or args.require_auto_intercept
-    ) and not payload["fail_closed_ready"]:
+    if args.require_auto_intercept and not auto_intercept_ready:
         requirement_failures.append("shell-adapter-auto-intercept")
+    if (args.require_adapter or args.require_fail_closed or args.require_raw_shell_coverage) and not raw_shell_coverage_ready:
+        requirement_failures.append("shell-adapter-raw-shell-coverage")
+    if args.require_command_proxy and not command_proxy_ready:
+        requirement_failures.append("shell-adapter-command-proxy")
     if args.require_telemetry and not adapter_events:
         requirement_failures.append("shell-adapter-telemetry")
     payload["requirements"] = {
@@ -274,6 +402,8 @@ def diagnose(args: argparse.Namespace) -> int:
         print("AI Client Governance Shell Adapter Diagnostics")
         print(f"Installed: {payload['installed']}")
         print(f"Adapter events: {payload['event_count']}")
+        print(f"Command proxy events: {payload['command_proxy']['event_count']}")
+        print(f"Raw shell coverage ready: {payload['raw_shell_coverage_ready']}")
         print(f"Fail-closed ready: {payload['fail_closed_ready']}")
         print(f"Scope kinds: {json.dumps(payload['scope_kind_counts'], ensure_ascii=False, sort_keys=True)}")
         print(f"Requirement failures: {', '.join(requirement_failures) or '<none>'}")
@@ -309,6 +439,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=run_command)
 
+    proxy = sub.add_parser("proxy-powershell", help="Run a command through an isolated PowerShell command proxy without touching user profiles.")
+    proxy.add_argument("--name", help="Tool or command name.")
+    proxy.add_argument("--task-id", help="Structured task id.")
+    proxy.add_argument("--task-tracking", help="Related task tracking file.")
+    proxy.add_argument("--task-type", action="append", help="Related task type.")
+    proxy.add_argument("--phase", help="Task phase.")
+    proxy.add_argument("--summary", help="Short result summary.")
+    proxy.add_argument("--trace-id", help="Trace id.")
+    proxy.add_argument("--task-node-id", help="Task tree node id associated with this invocation.")
+    proxy.add_argument("--cwd", help="Working directory for the command.")
+    proxy.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
+    proxy.add_argument("--scope-kind", help="Explicit governance scope kind.")
+    proxy.add_argument("--scope-reason", help="Explicit governance scope reason.")
+    proxy.add_argument("--powershell-command", help="PowerShell command string to run through the proxy.")
+    proxy.add_argument("--powershell-exe", help="PowerShell executable. Defaults to Windows PowerShell on Windows, pwsh elsewhere.")
+    proxy.add_argument("--allow-non-windows", action="store_true", help="Allow pwsh-based proxy execution on non-Windows hosts when available.")
+    proxy.add_argument("--format", choices=("text", "json"), default="text")
+    proxy.add_argument("command", nargs=argparse.REMAINDER)
+    proxy.set_defaults(func=run_powershell_proxy)
+
     snippet = sub.add_parser("profile-snippet", help="Print a PowerShell profile shim for the adapter.")
     snippet.add_argument("--script-path", help="Path to ai_client_governance.py for the shim.")
     snippet.set_defaults(func=profile_snippet)
@@ -322,9 +472,11 @@ def build_parser() -> argparse.ArgumentParser:
     diag = sub.add_parser("diagnose", help="Report shell adapter installation and telemetry evidence.")
     diag.add_argument("--task-id", help="Only include adapter events for one structured task id.")
     diag.add_argument("--profile-path", help="PowerShell profile file to inspect for the adapter marker.")
-    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
-    diag.add_argument("--require-fail-closed", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
+    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless raw shell coverage exists through auto-intercept or command proxy evidence.")
+    diag.add_argument("--require-fail-closed", action="store_true", help="Exit non-zero unless raw shell coverage exists through auto-intercept or command proxy evidence.")
     diag.add_argument("--require-auto-intercept", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
+    diag.add_argument("--require-command-proxy", action="store_true", help="Exit non-zero unless command proxy evidence exists.")
+    diag.add_argument("--require-raw-shell-coverage", action="store_true", help="Exit non-zero unless auto-intercept or command proxy evidence exists.")
     diag.add_argument("--require-telemetry", action="store_true", help="Exit non-zero unless shell-adapter telemetry evidence exists.")
     diag.add_argument("--format", choices=("text", "json"), default="text")
     diag.set_defaults(func=diagnose)

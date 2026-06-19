@@ -287,16 +287,19 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
   `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
   入口，不手工改运行态 telemetry、coord 或 lock 数据。
-- 重要本地命令的强制适配入口是
-  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter run -- ...`。
+- Windows PowerShell 重要本地命令的强制 raw-shell 覆盖入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter`
+  的 `proxy-powershell --powershell-command ...` 子命令。
+  显式 `shell-adapter run -- ...` 只证明 wrapper telemetry，不等同于 raw-shell 覆盖。
   `shell-adapter` 会写入 SQLite telemetry，并在事件中记录 `adapter_enforcement`、
-  `scope_kind`、`scope_reason` 和 task id。PowerShell 可用
+  `scope_kind`、`scope_reason` 和 task id。Windows PowerShell 强制代理必须使用
+  no-profile command proxy：临时脚本、`-NoProfile`、不写用户 `$PROFILE`。
   `shell-adapter profile-snippet` 或 `shell-adapter install-powershell --execute`
-  安装 profile shim；profile shim 是显式适配器，不声称能拦截宿主客户端内部所有裸
-  shell。收口诊断必须区分 shell-adapter auto-intercept、shell-adapter telemetry、
+  只属于用户显式批准的 profile shim，不得作为默认强制方案。收口诊断必须区分
+  shell-adapter auto-intercept、no-profile command proxy、shell-adapter telemetry、
   telemetry-wrapped command 和 raw shell gap；需要强制覆盖时使用
   `task-run diagnose --require-raw-shell-coverage` 或
-  `shell-adapter diagnose --require-auto-intercept` fail closed。
+  `shell-adapter diagnose --require-raw-shell-coverage` fail closed。
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告 execution telemetry 失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
