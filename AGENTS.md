@@ -604,7 +604,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   生成的人类可读报告，不作为新任务机器门禁输入。
 - task tracking Markdown 导出或历史记录放在 `.ai-client/project/records/task-tracking/`。
 - pending 恢复入口放在 `.ai-client/project/records/pending-tasks/`。
-- correction 记录放在 `.ai-client/project/records/corrections/`。
+- correction 机器事实源是 SQLite `corrections` 表；
+  `.ai-client/project/records/corrections/` 只放 `export-md`/`import-md` 生成或回灌的
+  人类可读 `.md` 副本与历史。
 - 运行态、日志和 telemetry 放在 `.ai-client/project/state/`、`.ai-client/project/logs/`
   和 `.ai-client/project/tmp/`，不写回通用仓库。
 - 结构化 task record 至少记录：用户输入拆解、用户要求、触发日志、任务类型、
@@ -818,12 +820,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 - 用户指出 AI 助手漏处理、错做、违反规则、验证不足或流程失效时，默认按高严重度
   correction 处理，除非用户明确说只是轻微问题。
-- correction 独立文件是事实源；`index.md` 是派生汇总。
-- 新增或更新 correction 后必须同步独立文件、索引、当前 tracking 和返回动作。
-- correction 模板由程序输出：
+- correction 事实源是 SQLite `aicg.db` 的 `corrections` 表（与 task record、framework-debt 一致）；
+  `.ai-client/project/records/corrections/*.md` 只是 `corrections export-md` 生成或
+  人类编辑后经 `corrections import-md` 回灌的派生/历史形式，不是机器事实源。
+- 新增或更新 correction 必须写入 `corrections` 表（`corrections add`/`corrections init`）；
+  已有 legacy `.md` 文件通过 `corrections import-md` 一次性导入并保持幂等。
+  如果仍保留 `.md` 作为人类可读副本，必须以 `corrections export-md` 重新生成或
+  使用 `corrections import-md --replace` 回灌，避免 DB 与 `.md` 漂移。
+- correction 模板由程序输出，且字段与 `corrections` 表 schema 对齐：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates correction`。
-- 扫描入口：
-  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py scan-corrections ...`。
+- 扫描入口（gate-pool `scan-corrections` 步骤直接复用该命令）：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py scan-corrections ...`，
+  该命令现在从 DB 读取，不再解析 `.md` 文件。
 - 不把一次性用户原话直接堆进规则入口 adapter；先沉淀 correction，再判断是否
   升级规则、脚本、skill、manifest 或 README。
 

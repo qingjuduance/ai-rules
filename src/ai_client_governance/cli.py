@@ -15,6 +15,7 @@ from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
 from ai_client_governance.records import (
+    corrections,
     framework_debt,
     scan_corrections,
     task_queue,
@@ -38,6 +39,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "completion-test": ("Plan task completion tests from changed paths and task types.", completion.main),
     "contract": ("Describe typed structured record contracts before execution.", contract.main),
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
+    "corrections": ("Manage correction records in SQLite.", corrections.main),
     "doc-index": ("Build and check Markdown document reference indexes.", doc_index.main),
     "file-ownership": ("Audit .ai-client host-project tracked and ignored paths.", file_ownership.main),
     "framework-debt": ("Track framework-level design debt.", framework_debt.main),

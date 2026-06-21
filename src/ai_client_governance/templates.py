@@ -149,51 +149,46 @@ TEMPLATES: dict[str, str] = {
 - 验证结果：
 - 剩余风险：
 """,
-    "correction": """# 错误关键词
+    "correction": """# CORR-YYYYMMDD-KEYWORD
 
-## 用户纠错摘要
+<!--
+  Machine fact source: SQLite `corrections` table in .ai-client/project/state/aicg.db.
+  This file is a human-readable copy produced by `corrections export-md` or
+  ingested by `corrections import-md`. Use `corrections add` to create records;
+  regenerate this file via `corrections export-md` after DB edits.
+-->
 
-- 用户指出的问题：
-- 发生时间：
+| 字段 | 值 |
+|------|-----|
+| 严重度 | P1 |
+| 类型 | 流程违规 |
+| 状态 | open |
+| 关联任务 | |
+| 创建时间 | YYYY-MM-DD |
 
-## 发生场景
-
-- 关联任务：
-- 关联文件：
-
-## 错误类型
-
-- 类型：
-- 严重程度：
-
-## 具体遗漏
-
--
-
-## 根因判断
+## 问题
 
 -
 
-## 即时修复动作
+## 根因
 
 -
 
-## 候选规则
+## 违反规则
+
+>
+
+## 实际影响
 
 -
 
-## 是否需要升级到规则/脚本/adapter
+## 修正动作
 
 -
 
-## 关联 task tracking
+## 升级判定
 
--
-
-## 当前状态
-
-- 状态：
-- 处理备注：
+→ 规则/脚本/skill/manifest/README：是否升级，原因。
 """,
     "agent-brief": """# Agent Brief
 
