@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from ai_client_governance.common.paths import (
     PENDING_TASKS_DIR,
 )
 from ai_client_governance.records import task_record as structured_task_record
+from ai_client_governance.records import corrections as correction_records
 
 
 TASK_ALIASES = {
@@ -103,6 +105,7 @@ REQ_ID_RE = re.compile(r"\b(?:REQ|UR)-[A-Za-z0-9][A-Za-z0-9_-]*\b")
 CORRECTION_PATH_RE = re.compile(
     r"\.ai-client/project/records/corrections/[^\s`|,)]+?\.md"
 )
+CORRECTION_ID_RE = re.compile(r"\bCORR-[A-Za-z0-9_-]+\b")
 
 SCRIPT_CAPABILITY_SIGNALS = [
     "脚本不支持",
@@ -634,6 +637,71 @@ def validate_correction_records(
         if Path(ref).name not in index_text:
             add(errors, "error", "referenced correction record is not listed in index.md.", ref)
     return records
+
+
+def correction_db_rows(
+    text: str,
+    root: Path,
+    db_override: str | None,
+) -> list[dict[str, str]]:
+    ids = sorted(set(CORRECTION_ID_RE.findall(text)))
+    if not ids:
+        return []
+    db = correction_records.db_path(root, db_override)
+    if not db.exists():
+        return []
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    try:
+        table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='corrections'"
+        ).fetchone()
+        if table is None:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = con.execute(
+            "SELECT correction_id, severity, status, impact, upgrade_judgment "
+            f"FROM corrections WHERE correction_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def validate_correction_db_records(
+    rows: list[dict[str, str]],
+    errors: list[Finding],
+    notes: list[Finding],
+    tracking: str,
+) -> bool:
+    if not rows:
+        return False
+    missing: list[str] = []
+    for row in rows:
+        correction_id = str(row.get("correction_id") or "")
+        if not str(row.get("severity") or "").strip():
+            missing.append(f"{correction_id}:severity")
+        if not str(row.get("impact") or "").strip():
+            missing.append(f"{correction_id}:impact")
+        if not str(row.get("upgrade_judgment") or "").strip():
+            missing.append(f"{correction_id}:upgrade_judgment")
+    if missing:
+        add(
+            errors,
+            "error",
+            "DB correction records must contain severity, impact, and upgrade_judgment: "
+            + ", ".join(missing),
+            tracking,
+        )
+    else:
+        add(
+            notes,
+            "note",
+            "Correction evidence resolved from SQLite corrections table; Markdown correction files/index are not required.",
+            tracking,
+        )
+    return True
 
 
 def validate_correction_severity_and_impact(
@@ -1257,6 +1325,7 @@ def validate_task_type(
     warnings: list[Finding],
     notes: list[Finding],
     tracking: str,
+    db_override: str | None = None,
 ) -> None:
     if task_type in {
         "correction",
@@ -1275,17 +1344,27 @@ def validate_task_type(
     if task_type == "code-debug":
         validate_code_debug(text, errors, tracking)
     elif task_type == "correction":
-        if not contains_any(
-            text,
-            [CORRECTIONS_DIR.as_posix(), ".ai-client/corrections", "correction", "修正文档"],
-        ):
-            add(errors, "error", "correction task must mention correction records.", tracking)
-        if "index.md" not in text:
-            add(errors, "error", "correction task must mention index.md writeback.", tracking)
-        if not contains_any(text, ["是否需要升级", "已提炼进要求", "规则沉淀判断"]):
-            add(errors, "error", "correction task must record upgrade/rule decision.", tracking)
-        records = validate_correction_records(text, root, errors, tracking)
-        validate_correction_severity_and_impact(text, records, errors, tracking)
+        db_rows = correction_db_rows(text, root, db_override)
+        if validate_correction_db_records(db_rows, errors, notes, tracking):
+            if not contains_any(text, ["是否需要升级", "已提炼进要求", "规则沉淀判断"]):
+                add(
+                    notes,
+                    "note",
+                    "Correction upgrade/rule decision came from SQLite correction records.",
+                    tracking,
+                )
+        else:
+            if not contains_any(
+                text,
+                [CORRECTIONS_DIR.as_posix(), ".ai-client/corrections", "correction", "修正文档"],
+            ):
+                add(errors, "error", "correction task must mention correction records.", tracking)
+            if "index.md" not in text:
+                add(errors, "error", "correction task must mention index.md writeback.", tracking)
+            if not contains_any(text, ["是否需要升级", "已提炼进要求", "规则沉淀判断"]):
+                add(errors, "error", "correction task must record upgrade/rule decision.", tracking)
+            records = validate_correction_records(text, root, errors, tracking)
+            validate_correction_severity_and_impact(text, records, errors, tracking)
     elif task_type == "rules-script":
         validate_network(text, errors, tracking)
         if not contains_any(text, ["批准标签", "批准：", "approval"]):
@@ -1338,6 +1417,7 @@ def build_report(
     explicit_task_types: list[str] | None,
     require_task_types: bool,
     only_worktree_creation_policy: bool = False,
+    db_override: str | None = None,
 ) -> Report:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -1374,7 +1454,7 @@ def build_report(
         add(errors, "error", "No task type selected in ## 任务类型门禁 or --task-types.", tracking_rel)
 
     for task_type in task_types:
-        validate_task_type(task_type, text, root, errors, warnings, notes, tracking_rel)
+        validate_task_type(task_type, text, root, errors, warnings, notes, tracking_rel, db_override)
 
     if inferred_task_types:
         add(notes, "note", f"Inferred task types: {', '.join(inferred_task_types)}.", tracking_rel)
@@ -1450,6 +1530,7 @@ def main() -> int:
         explicit_task_types=args.task_types,
         require_task_types=args.require_task_types,
         only_worktree_creation_policy=args.only_worktree_creation_policy,
+        db_override=args.db,
     )
 
     if args.format == "json":

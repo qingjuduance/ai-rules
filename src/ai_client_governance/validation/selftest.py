@@ -1822,6 +1822,20 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 },
             },
             {
+                "event_id": f"EVT-{task_id}-ANALYSIS-CONTRACT",
+                "event_type": structured_task_record.ANALYSIS_CONTRACT_EVENT,
+                "payload": {
+                    "join_point": "preflight",
+                    "analysis_summary": "selftest structured payload records complete analysis facts",
+                    "scope": "temporary structured task-record DB and gate commands",
+                    "non_goals": ["does not modify business project files"],
+                    "risks": ["fixture drift can hide gate regressions"],
+                    "acceptance": "task-record, task-gate, and session-gate structured paths pass",
+                    "validation_budget": "focused selftest fixture",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
                 "event_id": f"EVT-{task_id}-DISCOVERED-ISSUES",
                 "event_type": structured_task_record.DISCOVERED_ISSUE_RECORDING_EVENT,
                 "payload": {
@@ -2245,6 +2259,148 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_session_gate_task_id_skips_markdown_indexes(root: Path, run_dir: Path) -> TestResult:
+    task_id = "SESSION-DB-ONLY-SELFTEST"
+    project = run_dir / "session-db-only-project"
+    project.mkdir(parents=True, exist_ok=True)
+    db = run_dir / "session-db-only.db"
+    payload_path = run_dir / "session-db-only.json"
+    write_text_lf(payload_path, json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2))
+
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--root",
+                str(project),
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(payload_path),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "session-gate",
+                "--root",
+                str(project),
+                "--db",
+                str(db),
+                "--task-id",
+                task_id,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    output = commands[-1].stdout + commands[-1].stderr
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "Pending index is missing" not in output
+        and "DB-only task-record validation" in output
+    )
+    return TestResult(
+        name="session-gate-task-id-db-only",
+        passed=passed,
+        summary=(
+            "session-gate --task-id skipped legacy pending/corrections Markdown indexes"
+            if passed
+            else "session-gate --task-id still depended on legacy Markdown indexes"
+        ),
+        commands=commands,
+    )
+
+
+def test_task_gate_correction_db_records_without_markdown(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "correction-db-only.db"
+    tracking = run_dir / "correction-db-only.md"
+    correction_id = "CORR-SELFTEST-DB-GATE"
+    write_text_lf(
+        tracking,
+        tracking_text(include_status=True)
+        + "\n\n## 修正文档\n\n"
+        + f"- DB correction record: `{correction_id}`.\n"
+        + "- 规则沉淀判断：由 SQLite correction row 的 upgrade_judgment 字段记录。\n",
+    )
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "corrections",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "add",
+                "--correction-id",
+                correction_id,
+                "--title",
+                "selftest DB correction gate",
+                "--severity",
+                "P1",
+                "--status",
+                "open",
+                "--error-type",
+                "selftest",
+                "--impact",
+                "Verifies correction task-gate can use SQLite rows without Markdown copies.",
+                "--upgrade-judgment",
+                "Existing rule is sufficient for selftest; no Markdown index writeback is required.",
+                "--replace",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-gate",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--task-types",
+                "correction",
+                "--require-task-types",
+                "--task-tracking",
+                str(tracking),
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    output = commands[-1].stdout + commands[-1].stderr
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "corrections index.md is missing" not in output
+        and "index.md writeback" not in output
+        and "SQLite corrections table" in output
+    )
+    return TestResult(
+        name="task-gate-correction-db-records",
+        passed=passed,
+        summary=(
+            "correction task-gate accepted SQLite correction evidence without Markdown files/index"
+            if passed
+            else "correction task-gate still required Markdown correction files or index"
+        ),
+        commands=commands,
+    )
+
+
 def test_preflight_boundary_hardening(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "preflight-boundary-hardening.db"
     valid_task = "PREFLIGHT-HARDENING-VALID"
@@ -2622,6 +2778,16 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
                 "selftest-provider",
                 "--db",
                 str(db),
+                "--analysis-summary",
+                "Verify lifecycle input-filter facts before preflight.",
+                "--analysis-scope",
+                "src/ai_client_governance/lifecycle/engine.py",
+                "--non-goal",
+                "Do not exercise repository writes in this selftest.",
+                "--risk",
+                "Analysis-contract gates must not hide missing input-filter facts.",
+                "--acceptance",
+                "Preflight passes when task-record facts and analysis contract are complete.",
                 "--task-record-json",
                 str(generated),
                 "--apply-task-record",
@@ -4830,6 +4996,8 @@ def main() -> int:
             test_task_lifecycle_fail_on_blocking_drift(root, run_dir),
             test_gate_pool_validate_doc_tracking_context(root, run_dir),
             test_structured_task_record_gate(root, run_dir),
+            test_session_gate_task_id_skips_markdown_indexes(root, run_dir),
+            test_task_gate_correction_db_records_without_markdown(root, run_dir),
             test_preflight_boundary_hardening(root, run_dir),
             test_final_output_discovered_issue_gate(root, run_dir),
             test_multi_agent_dispatch_brief_gate(root, run_dir),

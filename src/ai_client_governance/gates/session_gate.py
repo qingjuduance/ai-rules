@@ -625,13 +625,16 @@ def format_text(report: Report) -> str:
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
-    report = build_report(
-        root=root,
-        tracking_arg=args.task_tracking,
-        require_tracking=args.require_task_tracking,
-        allow_inserted_tracking=args.allow_inserted_task_tracking,
-    )
     if args.task_id:
+        report = Report(
+            root=str(root.resolve()),
+            active_pending_count=0,
+            task_tracking=None,
+            checked_pending=[],
+            errors=[],
+            warnings=[],
+            notes=[],
+        )
         db = structured_task_record.db_path(root, args.db)
         if not db.exists():
             add(report.errors, "error", f"Structured task DB does not exist: {db}")
@@ -654,9 +657,15 @@ def main() -> int:
         add(
             report.notes,
             "note",
-            "Structured task id supplied; Markdown task tracking gate is not required for task evidence.",
+            "Structured task id supplied; session gate used DB-only task-record validation and skipped legacy Markdown pending/corrections indexes.",
         )
     else:
+        report = build_report(
+            root=root,
+            tracking_arg=args.task_tracking,
+            require_tracking=args.require_task_tracking,
+            allow_inserted_tracking=args.allow_inserted_task_tracking,
+        )
         validate_task_gate(
             root=root,
             tracking_arg=args.task_tracking,

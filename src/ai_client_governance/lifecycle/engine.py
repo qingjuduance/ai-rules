@@ -752,6 +752,30 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "fail_policy": "fail_closed",
                 },
             },
+            {
+                "event_id": f"EVT-{id_base}-ANALYSIS-CONTRACT",
+                "event_type": structured_task_record.ANALYSIS_CONTRACT_EVENT,
+                "payload": {
+                    "join_point": "preflight",
+                    "analysis_summary": args.analysis_summary
+                    or "Lifecycle input-filter generated a preflight analysis contract.",
+                    "scope": args.analysis_scope
+                    or ", ".join(report.classification.scope_paths)
+                    or report.classification.scope_kind,
+                    "non_goals": args.non_goal
+                    or "No implementation is claimed by input-filter generation.",
+                    "risks": args.risk
+                    or "Generated preflight facts must be validated before write-intent.",
+                    "acceptance": args.acceptance
+                    or "task-record preflight gate passes after required facts are applied.",
+                    "validation_budget": {
+                        "profile": args.completion_profile,
+                        "budget_seconds": args.budget_seconds,
+                        "allow_expensive": args.allow_expensive,
+                    },
+                    "fail_policy": "fail_closed",
+                },
+            },
         ],
     }
     return payload
