@@ -230,6 +230,88 @@ TEMPLATES: dict[str, str] = {
 
 ## token_usage_source
 """,
+    "design-package": """{
+  "problem": "What problem this design-only task is solving.",
+  "goals": [
+    "Goal that the executor and reviewer must preserve."
+  ],
+  "non_goals": [
+    "Explicitly out-of-scope behavior, file, command, or migration."
+  ],
+  "architecture": {
+    "summary": "Proposed runtime/schema/control-flow shape.",
+    "components": [
+      "Component or module to change."
+    ],
+    "interfaces": [
+      "Command, event, table, or gate interface."
+    ]
+  },
+  "data_model": {
+    "tables": [],
+    "events": [
+      "design-package.analysis"
+    ],
+    "payload_keys": [
+      "problem",
+      "goals",
+      "non_goals",
+      "architecture",
+      "data_model",
+      "policy_gate",
+      "migration",
+      "validation",
+      "risks",
+      "implementation_tasks",
+      "reviewer_acceptance",
+      "handoff_capsule"
+    ]
+  },
+  "policy_gate": {
+    "enforcement_status": "implemented|design_only|blocked",
+    "preflight_gate": "What preflight gate must check.",
+    "final_gate": "What final gate must check.",
+    "closeout_gate": "What closeout or handoff gate must check."
+  },
+  "migration": {
+    "required": false,
+    "cleanup": "Legacy state or Markdown cleanup plan, if any."
+  },
+  "validation": {
+    "commands": [
+      "python scripts/ai_client_governance.py task-record gate --task-id <TASK>"
+    ],
+    "failure_paths": [
+      "Missing design-package.analysis must fail for design-only tasks."
+    ],
+    "success_paths": [
+      "Complete design package passes gate."
+    ]
+  },
+  "risks": [
+    "Known risk or residual manual-review boundary."
+  ],
+  "implementation_tasks": [
+    {
+      "task_id": "IMPL-001",
+      "summary": "Executor task summary.",
+      "acceptance": "How to know this implementation task is done."
+    }
+  ],
+  "reviewer_acceptance": [
+    {
+      "criterion": "Reviewer criterion.",
+      "evidence": "Evidence the reviewer must inspect."
+    }
+  ],
+  "handoff_capsule": {
+    "summary": "Short handoff summary for the next agent.",
+    "required_reading": [
+      "Files, task ids, or event ids the next agent must read first."
+    ],
+    "handoff_instructions": "What the executor/reviewer should do next."
+  }
+}""",
 }
 
 

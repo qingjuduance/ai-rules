@@ -1945,6 +1945,75 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
     return payload
 
 
+def design_package_payload(task_id: str) -> dict[str, object]:
+    return {
+        "problem": "Design-only tasks need a DB-backed handoff/review package.",
+        "goals": [
+            "Store design package facts as a typed task-record event.",
+            "Let executor and reviewer agents read stable fields before acting.",
+        ],
+        "non_goals": [
+            "No README, AGENTS, manifest, or legacy Markdown state changes.",
+        ],
+        "architecture": {
+            "summary": "task-record stores design-package.analysis payloads in events.",
+            "components": ["records.task_record gate", "templates design-package"],
+            "interfaces": ["task-record design-package", "task-record gate"],
+        },
+        "data_model": {
+            "tables": ["events"],
+            "event_type": structured_task_record.DESIGN_PACKAGE_EVENT,
+            "payload_keys": list(structured_task_record.DESIGN_PACKAGE_REQUIRED_FIELDS),
+        },
+        "policy_gate": {
+            "enforcement_status": "implemented",
+            "preflight_gate": "design-only tasks require design-package.analysis",
+            "final_gate": "recorded design-package.analysis payloads must be complete",
+        },
+        "migration": {
+            "required": False,
+            "cleanup": "No legacy state migration in focused selftest.",
+        },
+        "validation": {
+            "commands": [
+                "task-record gate --event preflight",
+                "task-record design-package --payload-file design-package.json",
+            ],
+            "failure_paths": [
+                "design-only without design-package.analysis fails",
+                "incomplete design-package.analysis fails",
+            ],
+            "success_paths": [
+                "complete design-package.analysis passes",
+            ],
+        },
+        "risks": [
+            "The event payload is intentionally flexible below the required top-level keys.",
+        ],
+        "implementation_tasks": [
+            {
+                "task_id": "IMPL-DESIGN-PACKAGE-001",
+                "summary": "Add typed design package append command and gate validation.",
+                "acceptance": "focused selftest passes missing, invalid, and valid paths.",
+            }
+        ],
+        "reviewer_acceptance": [
+            {
+                "criterion": "Reviewer can verify goals, non-goals, policy gates, risks, tasks, and handoff capsule.",
+                "evidence": "task-record gate notes design package facts present.",
+            }
+        ],
+        "handoff_capsule": {
+            "summary": f"Design package fixture for {task_id}.",
+            "required_reading": [
+                "src/ai_client_governance/records/task_record.py",
+                "src/ai_client_governance/templates.py",
+            ],
+            "handoff_instructions": "Executor reads this payload before implementation; reviewer gates against it.",
+        },
+    }
+
+
 def payload_without_event(task_id: str, event_type: str) -> dict[str, object]:
     payload = structured_payload(task_id)
     payload["events"] = [
@@ -2747,6 +2816,138 @@ def test_multi_agent_dispatch_brief_gate(root: Path, run_dir: Path) -> TestResul
             "multi-agent task-record gates require a structured dispatch brief"
             if passed
             else "multi-agent dispatch brief gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_design_package_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "design-package.db"
+    missing_task = "DESIGN-PACKAGE-MISSING"
+    invalid_task = "DESIGN-PACKAGE-INVALID"
+    command_task = "DESIGN-PACKAGE-COMMAND"
+    missing_payload = structured_payload(missing_task, include_worktree=False)
+    invalid_payload = structured_payload(invalid_task, include_worktree=False)
+    command_payload = structured_payload(command_task, include_worktree=False)
+    for payload in (missing_payload, invalid_payload, command_payload):
+        payload["task"]["task_types"] = ["design-only"]  # type: ignore[index]
+
+    incomplete_design = design_package_payload(invalid_task)
+    incomplete_design.pop("handoff_capsule")
+    invalid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{invalid_task}-DESIGN-PACKAGE",
+            "event_type": structured_task_record.DESIGN_PACKAGE_EVENT,
+            "payload": incomplete_design,
+        }
+    )
+
+    missing = run_dir / "design-package-missing.json"
+    invalid = run_dir / "design-package-invalid.json"
+    command_record = run_dir / "design-package-command-task.json"
+    command_design = run_dir / "design-package-payload.json"
+    missing.write_text(json.dumps(missing_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    command_record.write_text(json.dumps(command_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    command_design.write_text(json.dumps(design_package_payload(command_task), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "templates", "design-package"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(invalid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                invalid_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(command_record)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "design-package",
+                "--task-id",
+                command_task,
+                "--payload-file",
+                str(command_design),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                command_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    template_output = commands[0].stdout + commands[0].stderr
+    missing_output = commands[3].stdout + commands[3].stderr
+    invalid_output = commands[5].stdout + commands[5].stderr
+    valid_output = commands[8].stdout + commands[8].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and "handoff_capsule" in template_output
+        and commands[1].exit_code == 0
+        and commands[2].exit_code == 0
+        and commands[3].exit_code != 0
+        and "design-only tasks require event_type=design-package.analysis" in missing_output
+        and commands[4].exit_code == 0
+        and commands[5].exit_code != 0
+        and "design package event is incomplete" in invalid_output
+        and commands[6].exit_code == 0
+        and commands[7].exit_code == 0
+        and commands[8].exit_code == 0
+        and "design package facts present: design-package.analysis" in valid_output
+    )
+    return TestResult(
+        name="design-package-handoff-review-gate",
+        passed=passed,
+        summary=(
+            "design-only task-record gates require complete DB-backed design package facts"
+            if passed
+            else "design-package handoff/review gate regression failed"
         ),
         commands=commands,
     )
@@ -5547,6 +5748,7 @@ def main() -> int:
             test_preflight_boundary_hardening(root, run_dir),
             test_final_output_discovered_issue_gate(root, run_dir),
             test_multi_agent_dispatch_brief_gate(root, run_dir),
+            test_design_package_gate(root, run_dir),
             test_tool_flow_accepts_task_record_gate(root, run_dir),
             test_lifecycle_input_filter_preflight(root, run_dir),
             test_task_run_command_compression_plan(root, run_dir),

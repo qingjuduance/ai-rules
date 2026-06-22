@@ -40,6 +40,7 @@ WORKTREE_PUSH_STATUSES = ("not_pushed", "pushed", "not_required")
 GATE_RESULTS = ("pass", "fail", "warn", "skipped")
 
 BASE_OUTPUT_TYPES = {"plan", "status", "final", "script", "error", "git_worktree"}
+DESIGN_ONLY_TASK_TYPE = "design-only"
 MUTATING_TASK_TYPES = {
     "code-debug",
     "correction",
@@ -51,11 +52,46 @@ MUTATING_TASK_TYPES = {
     "multi-agent",
     "long-running",
 }
-KNOWN_TASK_TYPES = set(MUTATING_TASK_TYPES)
+KNOWN_TASK_TYPES = set(MUTATING_TASK_TYPES) | {DESIGN_ONLY_TASK_TYPE}
 INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
 ANALYSIS_CONTRACT_EVENT = "analysis-contract.preflight"
 CLIENT_IDENTITY_EVENT = "client-identity.analysis"
 CAPABILITY_GATEWAY_FACTS_EVENT = "capability-gateway.facts"
+DESIGN_PACKAGE_EVENT = "design-package.analysis"
+DESIGN_PACKAGE_REQUIRED_FIELDS = (
+    "problem",
+    "goals",
+    "non_goals",
+    "architecture",
+    "data_model",
+    "policy_gate",
+    "migration",
+    "validation",
+    "risks",
+    "implementation_tasks",
+    "reviewer_acceptance",
+    "handoff_capsule",
+)
+DESIGN_PACKAGE_LIST_FIELDS = {
+    "goals",
+    "non_goals",
+    "risks",
+    "implementation_tasks",
+    "reviewer_acceptance",
+}
+DESIGN_PACKAGE_OBJECT_FIELDS = {
+    "architecture",
+    "data_model",
+    "policy_gate",
+    "migration",
+    "validation",
+    "handoff_capsule",
+}
+DESIGN_PACKAGE_HANDOFF_REQUIRED_FIELDS = (
+    "summary",
+    "required_reading",
+    "handoff_instructions",
+)
 INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
 INPUT_FILTER_REQUIREMENT_FIELDS = (
     "summary",
@@ -118,6 +154,13 @@ def parse_args() -> argparse.Namespace:
     append_event.add_argument("--event-id", default="")
     append_event.add_argument("--payload-json", default="{}", help="JSON object payload. Defaults to {}.")
     append_event.add_argument("--payload-file", help="UTF-8 JSON file payload. Overrides --payload-json.")
+
+    design_package = sub.add_parser("design-package", help="Append a typed design-package.analysis event to an existing task.")
+    common_cli_args.add_common_global_args(design_package, suppress_default=True)
+    design_package.add_argument("--task-id", required=True)
+    design_package.add_argument("--event-id", default="")
+    design_package.add_argument("--payload-json", default="", help="Design package JSON object.")
+    design_package.add_argument("--payload-file", help="UTF-8 JSON file payload. Overrides --payload-json.")
 
     append_worktree = sub.add_parser("append-worktree", help="Append or replace one worktree evidence row for an existing task.")
     common_cli_args.add_common_global_args(append_worktree, suppress_default=True)
@@ -416,7 +459,7 @@ _PAYLOAD_TABLE_LAYOUT: dict[str, list[tuple[str, str, str]]] = {
         ("title", "string", "Human-readable task title. Required."),
         ("status", "enum<TASK_STATUSES>", "Lifecycle state. Required."),
         ("task_size", "string", "small|medium|large. Defaults to medium."),
-        ("task_types", "array<string>", "Gate routing. Subset of code-debug|correction|docs|frontend|git|long-running|multi-agent|resume|rules-script. Required."),
+        ("task_types", "array<string>", "Gate routing. Subset of code-debug|correction|design-only|docs|frontend|git|long-running|multi-agent|resume|rules-script. Required."),
         ("summary", "string", "Short task summary. Optional."),
         ("approval_label", "string", "Required when file changes need explicit approval."),
         ("trace_id", "string", "Optional trace id shared across rows from the same run."),
@@ -508,7 +551,7 @@ _PAYLOAD_TABLE_LAYOUT: dict[str, list[tuple[str, str, str]]] = {
     ],
     "events": [
         ("event_id", "string", "Stable id; generated when omitted."),
-        ("event_type", "string", "Dot-separated event type: client-identity.analysis, plan-approval-boundary.analysis, command-compression.analysis, scope-classification.analysis, user-claim-validation.analysis, state-artifact-ownership.analysis, patch-preflight.analysis, etc. Required."),
+        ("event_type", "string", "Dot-separated event type: design-package.analysis, client-identity.analysis, plan-approval-boundary.analysis, command-compression.analysis, scope-classification.analysis, user-claim-validation.analysis, state-artifact-ownership.analysis, patch-preflight.analysis, etc. Required."),
         ("payload", "object", "Free-form JSON object. Required even if empty object {}. Written into the DB as JSON text."),
         ("created_at", "datetime", "ISO 8601 timestamp. Defaults to now()."),
     ],
@@ -694,7 +737,7 @@ def format_compact_text_descriptor() -> str:
     """Simplified text output: ~30 lines, human and AI readable."""
     lines: list[str] = []
     lines.append("task-record schema")
-    lines.append("commands: init | apply | describe [--sample] | gate | status | export-md")
+    lines.append("commands: init | apply | design-package | describe [--sample] | gate | status | export-md")
     lines.append("")
     lines.append("tables (key fields):")
     for table, fields in _compact_table_fields().items():
@@ -712,9 +755,11 @@ def format_compact_text_descriptor() -> str:
     lines.append("  task status: candidate, awaiting_approval, ready, active, verifying, done, blocked, cancelled")
     lines.append("  validation result: pass, fail, warn, skipped")
     lines.append("  output_type: plan, status, final, script, error, git_worktree")
+    lines.append("  task_types includes design-only for DB-backed design handoff/review packages")
     lines.append("")
     lines.append("notes:")
     lines.append("  - created_at / updated_at auto-filled on write")
+    lines.append("  - design-package command writes event_type=design-package.analysis")
     lines.append("  - --sample for a minimal apply JSON payload")
     lines.append("  - --format json for the full schema descriptor")
     return "\n".join(lines)
@@ -987,7 +1032,54 @@ def load_json_object_from_args(root: Path, payload_json: str, payload_file: str 
         if not path.is_absolute():
             path = root / path
         return load_json_object(path.read_text(encoding="utf-8-sig"), "payload-file")
+    if not payload_json:
+        raise ValueError("payload-json or payload-file is required")
     return load_json_object(payload_json, "payload-json")
+
+
+def _value_has_content(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_value_has_content(item) for item in value)
+    if isinstance(value, dict):
+        return any(_value_has_content(item) for item in value.values())
+    return value is not None
+
+
+def design_package_errors(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field in DESIGN_PACKAGE_REQUIRED_FIELDS:
+        if field not in payload or not _value_has_content(payload.get(field)):
+            errors.append(f"missing_or_empty:{field}")
+
+    for field in sorted(DESIGN_PACKAGE_LIST_FIELDS):
+        value = payload.get(field)
+        if not isinstance(value, list) or not value:
+            errors.append(f"must_be_non_empty_list:{field}")
+            continue
+        for index, item in enumerate(value):
+            if not _value_has_content(item):
+                errors.append(f"empty_list_item:{field}[{index}]")
+
+    for field in sorted(DESIGN_PACKAGE_OBJECT_FIELDS):
+        value = payload.get(field)
+        if not isinstance(value, dict) or not _value_has_content(value):
+            errors.append(f"must_be_non_empty_object:{field}")
+
+    handoff = payload.get("handoff_capsule")
+    if isinstance(handoff, dict):
+        for field in DESIGN_PACKAGE_HANDOFF_REQUIRED_FIELDS:
+            if not _value_has_content(handoff.get(field)):
+                errors.append(f"handoff_capsule_missing:{field}")
+    return errors
+
+
+def require_design_package_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    errors = design_package_errors(payload)
+    if errors:
+        raise ValueError("invalid design package payload: " + "; ".join(errors))
+    return payload
 
 
 def append_event_row(
@@ -1987,6 +2079,49 @@ def validate_agent_dispatch_brief(
         add(notes, "note", f"agent dispatch brief facts present: {AGENT_DISPATCH_BRIEF_EVENT}", "events")
 
 
+def validate_design_package(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Validate DB-backed design handoff/review packages.
+
+    A design-only task must have a typed design package. Any task that records
+    this event must use the same complete payload so downstream executor and
+    reviewer agents can rely on stable keys instead of prose summaries.
+    """
+    payloads = event_payloads(con, task["task_id"], DESIGN_PACKAGE_EVENT)
+    if not payloads:
+        if DESIGN_ONLY_TASK_TYPE in task_types:
+            add(errors, "error", f"design-only tasks require event_type={DESIGN_PACKAGE_EVENT}", "events")
+        return
+
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        payload_errors = design_package_errors(payload)
+        if payload_errors:
+            invalid_event_ids.append(f"{event_id}:{','.join(payload_errors)}")
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "design package event is incomplete; required fields are "
+                + ", ".join(DESIGN_PACKAGE_REQUIRED_FIELDS)
+            ),
+            "events",
+            "; ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"design package facts present: {DESIGN_PACKAGE_EVENT}", "events")
+
+
 def validate_capability_gateway_facts(
     con: sqlite3.Connection,
     task: sqlite3.Row,
@@ -2076,6 +2211,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_readonly_side_effect_policy(con, task, task_types, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
     validate_agent_dispatch_brief(con, task, task_types, errors, notes)
+    validate_design_package(con, task, task_types, errors, notes)
     validate_analysis_contract_preflight(con, task, task_types, event, errors, notes)
     validate_capability_gateway_facts(con, task, task_types, event, db, errors, notes)
 
@@ -2281,6 +2417,20 @@ def main() -> int:
             )
             result = {"db": str(path), "task_id": args.task_id, "event_id": event_id, "appended": True}
             print_json(result) if args.format == "json" else print(f"Appended task event: {event_id}")
+            return 0
+        if args.command == "design-package":
+            payload = require_design_package_payload(
+                load_json_object_from_args(root, args.payload_json, args.payload_file)
+            )
+            event_id = append_event_row(
+                con,
+                task_id=args.task_id,
+                event_type=DESIGN_PACKAGE_EVENT,
+                payload=payload,
+                event_id=args.event_id,
+            )
+            result = {"db": str(path), "task_id": args.task_id, "event_id": event_id, "appended": True}
+            print_json(result) if args.format == "json" else print(f"Appended design package event: {event_id}")
             return 0
         if args.command == "append-worktree":
             worktree_id = append_worktree_row(con, args)
