@@ -429,6 +429,53 @@ def default_components() -> list[ComponentDefinition]:
             },
         ),
         component(
+            "client.runtime.host-capability-gateway",
+            "processing-interceptor",
+            "preflight",
+            95,
+            "Bridge host-client write/shell capabilities to lifecycle, task-record, and local command-proxy facts.",
+            fail_policy="fail_closed",
+            events=("user-message", "write-intent", "after-change", "final-output", "resume"),
+            task_types=(
+                "code-debug",
+                "correction",
+                "rules-script",
+                "docs",
+                "git",
+                "frontend",
+                "resume",
+                "multi-agent",
+            ),
+            requires_facts=("task_id", "input_filter_preflight_event", "capability_gateway_facts"),
+            produces_facts=(
+                "lifecycle_input_filter_enforced",
+                "prewrite_runtime_adapter_decision",
+                "non_invasive_shell_command_proxy",
+            ),
+            effect="state_write",
+            dedupe_key="task_id:event:host-capability-gateway",
+            gate_label="ai_client_governance.py task-record gate requires event_type=capability-gateway.facts",
+            gate_step="capability-gateway",
+            condition=(
+                "Run at host-client capability boundaries before repository writes or important shell commands. "
+                "The default raw-shell strategy is local command-proxy activation, like a Python virtual environment; "
+                "it must not modify user profiles, PATH, terminal settings, or global shell behavior."
+            ),
+            performance_budget="single SQLite fact check plus optional telemetry read; no profile writes",
+            metadata={
+                "required_event": "capability-gateway.facts",
+                "lifecycle_boundary": "lifecycle input-filter + task-record gate --event preflight",
+                "shell_boundary": "shell-adapter proxy-powershell no-profile command proxy",
+                "non_invasive_policy": {
+                    "profile_policy": "no_profile",
+                    "profile_touched": False,
+                    "user_shell_impact": "none",
+                    "global_path_modified": False,
+                },
+                "profile_shim_policy": "explicit opt-in only; not a default enforcement path",
+            },
+        ),
+        component(
             "input.filter.client-identity",
             "input-filter",
             "input",
@@ -603,13 +650,17 @@ def default_components() -> list[ComponentDefinition]:
             dedupe_key="task_id:event:shell-proxy-usage",
             condition=(
                 "Run before important Windows PowerShell commands. Complex command strings should use "
-                "shell-adapter proxy-powershell --powershell-command-file."
+                "shell-adapter proxy-powershell --powershell-command-file. The proxy is local/no-profile "
+                "and must not alter user shell profiles, PATH, terminal settings, or global behavior."
             ),
             performance_budget="constant-size policy record; diagnostics are a separate readonly gate",
             metadata={
                 "required_event": "shell-proxy-usage.analysis",
                 "required_fields": ("policy", "planned_runner"),
-                "final_required": "used_proxy=true or exception_reason",
+                "final_required": (
+                    "used_proxy=true with enforcement_mode=non-invasive-command-proxy, "
+                    "profile_policy=no_profile, profile_touched=false, user_shell_impact=none, or exception_reason"
+                ),
             },
         ),
         component(
@@ -1718,16 +1769,18 @@ def default_components() -> list[ComponentDefinition]:
             produces_facts=("shell_adapter_diagnostics",),
             effect="readonly",
             condition="Run when final or status output depends on execution telemetry coverage.",
-            performance_budget="read adapter marker/env and indexed SQLite telemetry events only",
+            performance_budget="read local env and indexed SQLite telemetry events; profile marker is optional explicit opt-in evidence",
             metadata={
                 "reports": (
-                    "profile/env adapter installation",
+                    "local env adapter activation",
                     "no-profile command proxy telemetry",
+                    "optional explicit profile shim marker",
                     "adapter telemetry event count",
                     "fail-closed readiness",
                     "raw shell gap",
                 ),
                 "fact_source": ".ai-client/project/state/aicg.db plus optional PowerShell profile marker; command proxy must not write user profiles",
+                "non_invasive_default": "no-profile command proxy, comparable to a project-local virtual environment activation",
             },
         ),
         component(
@@ -1874,14 +1927,15 @@ def default_components() -> list[ComponentDefinition]:
             dedupe_key="task_id:event:trace_id:raw-shell-coverage",
             condition=(
                 "Run when important local commands must prove shell coverage. "
-                "Task-run/tool telemetry can prove commands were wrapped, while shell-adapter env/profile evidence "
-                "or no-profile command-proxy telemetry closes the raw host shell gap for governed commands."
+                "Task-run/tool telemetry can prove commands were wrapped, while local env activation "
+                "or no-profile command-proxy telemetry closes the raw host shell gap for governed commands; "
+                "profile shims are explicit opt-in only."
             ),
-            performance_budget="read SQLite/JSONL telemetry and optional profile marker only; no command execution",
+            performance_budget="read SQLite/JSONL telemetry and optional profile marker only; no command execution or profile writes",
             dependencies=("preflight.interceptor.task-run-dag.mutating",),
             metadata={
                 "required_cli": "task-run diagnose --require-raw-shell-coverage",
-                "shell_adapter_cli": "shell-adapter diagnose --require-auto-intercept",
+                "shell_adapter_cli": "shell-adapter diagnose --require-command-proxy",
                 "command_proxy_cli": "shell-adapter proxy-powershell",
                 "wrapped_telemetry_policy": "task-run/tool telemetry counts as compensation evidence; shell-adapter command-proxy telemetry clears raw_shell_gap for governed commands without touching user profiles",
             },

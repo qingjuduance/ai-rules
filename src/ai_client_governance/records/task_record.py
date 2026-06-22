@@ -1636,12 +1636,25 @@ def validate_shell_proxy_usage(
         exception_reason = str(payload.get("exception_reason") or "").strip()
         used_proxy = payload.get("used_proxy")
         telemetry_evidence = str(payload.get("telemetry_evidence") or payload.get("proxy_invocation_id") or "").strip()
+        enforcement_mode = str(payload.get("enforcement_mode") or payload.get("shell_enforcement_mode") or "").strip()
+        profile_policy = str(payload.get("profile_policy") or "").strip()
+        profile_touched = payload.get("profile_touched")
+        user_shell_impact = str(payload.get("user_shell_impact") or "").strip()
         if not policy or not planned_runner:
+            invalid_event_ids.append(event_id)
+            continue
+        if profile_touched is True or (profile_policy and profile_policy != "no_profile"):
             invalid_event_ids.append(event_id)
             continue
         if event == "final":
             if used_proxy is True:
                 if not telemetry_evidence:
+                    invalid_event_ids.append(event_id)
+                    continue
+                if enforcement_mode != "non-invasive-command-proxy":
+                    invalid_event_ids.append(event_id)
+                    continue
+                if profile_policy != "no_profile" or profile_touched is not False or user_shell_impact != "none":
                     invalid_event_ids.append(event_id)
                     continue
             elif not exception_reason:
@@ -1652,7 +1665,8 @@ def validate_shell_proxy_usage(
     if not valid:
         suffix = (
             "; final gate also requires used_proxy=true with telemetry_evidence/proxy_invocation_id, "
-            "or exception_reason"
+            "enforcement_mode=non-invasive-command-proxy, profile_policy=no_profile, "
+            "profile_touched=false, user_shell_impact=none, or exception_reason"
             if event == "final"
             else ""
         )
@@ -1665,6 +1679,68 @@ def validate_shell_proxy_usage(
         )
     else:
         add(notes, "note", f"shell proxy usage facts present: {SHELL_PROXY_USAGE_EVENT}", "events")
+
+
+def validate_capability_gateway_event(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    payloads = event_payloads(con, task["task_id"], CAPABILITY_GATEWAY_FACTS_EVENT)
+    if not payloads:
+        add(errors, "error", f"capability gateway requires event_type={CAPABILITY_GATEWAY_FACTS_EVENT}", "events")
+        return
+
+    required_components = {
+        "client.runtime.host-capability-gateway",
+        "input.filter.user-message-preflight",
+        "prewrite.gate.approved-task-worktree",
+        "preflight.interceptor.raw-shell-coverage",
+    }
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        components = payload.get("runtime_adapter_components")
+        component_set = set(str(item) for item in components) if isinstance(components, list) else set()
+        if payload.get("lifecycle_input_filter_enforced") is not True:
+            invalid_event_ids.append(event_id)
+            continue
+        if not str(payload.get("prewrite_runtime_adapter") or "").strip():
+            invalid_event_ids.append(event_id)
+            continue
+        if not required_components.issubset(component_set):
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("shell_enforcement_mode") or "").strip() != "non-invasive-command-proxy":
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("profile_policy") or "").strip() != "no_profile":
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("profile_touched") is not False:
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("user_shell_impact") or "").strip() != "none":
+            invalid_event_ids.append(event_id)
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "capability-gateway facts must record lifecycle_input_filter_enforced=true, "
+                "prewrite runtime adapter, required runtime_adapter_components, "
+                "shell_enforcement_mode=non-invasive-command-proxy, profile_policy=no_profile, "
+                "profile_touched=false, and user_shell_impact=none"
+            ),
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"capability gateway facts present: {CAPABILITY_GATEWAY_FACTS_EVENT}", "events")
 
 
 def validate_analysis_contract_preflight(
@@ -1961,6 +2037,7 @@ def validate_capability_gateway_facts(
             "capability gateway final gate requires used_proxy=true with telemetry_evidence, or exception_reason",
             "events",
         )
+    validate_capability_gateway_event(con, task, errors, notes)
 
 
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:

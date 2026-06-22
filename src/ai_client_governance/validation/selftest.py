@@ -1729,8 +1729,12 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "event_type": structured_task_record.SHELL_PROXY_USAGE_EVENT,
                 "payload": {
                     "join_point": "write-intent",
-                    "policy": "selftest records shell proxy policy for mutating work",
-                    "planned_runner": "shell-adapter proxy-powershell",
+                    "policy": "selftest records non-invasive shell command proxy policy for mutating work",
+                    "planned_runner": "shell-adapter proxy-powershell --powershell-command-file",
+                    "enforcement_mode": "non-invasive-command-proxy",
+                    "profile_policy": "no_profile",
+                    "profile_touched": False,
+                    "user_shell_impact": "none",
                     "used_proxy": True,
                     "telemetry_evidence": "shell-adapter:selftest-fixture",
                     "exception_reason": "",
@@ -1836,6 +1840,29 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 },
             },
             {
+                "event_id": f"EVT-{task_id}-CAPABILITY-GATEWAY",
+                "event_type": structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT,
+                "payload": {
+                    "join_point": "host-capability-boundary",
+                    "lifecycle_input_filter_enforced": True,
+                    "prewrite_runtime_adapter": "task-record gate --event preflight",
+                    "runtime_adapter_components": [
+                        "client.runtime.host-capability-gateway",
+                        "input.filter.user-message-preflight",
+                        "prewrite.gate.approved-task-worktree",
+                        "preflight.interceptor.raw-shell-coverage",
+                    ],
+                    "shell_enforcement_mode": "non-invasive-command-proxy",
+                    "shell_command_proxy": "shell-adapter proxy-powershell",
+                    "profile_policy": "no_profile",
+                    "profile_touched": False,
+                    "user_shell_impact": "none",
+                    "raw_shell_gap_policy": "selftest final gate requires non-invasive command proxy facts",
+                    "client_runtime_scope": "ai-client-governance-common",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
                 "event_id": f"EVT-{task_id}-DISCOVERED-ISSUES",
                 "event_type": structured_task_record.DISCOVERED_ISSUE_RECORDING_EVENT,
                 "payload": {
@@ -1905,6 +1932,7 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     missing_filter_payload["events"] = []
     missing_filter_payload["triggers"][0]["trigger_type"] = "selftest"
     no_worktree_payload = structured_payload(task_id + "-NOWORKTREE", include_worktree=False)
+    missing_gateway_payload = payload_without_event(task_id + "-NOGATEWAY", structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT)
     agent_required_payload = structured_payload(task_id + "-AGENTREQUIRED")
     for event_payload in agent_required_payload["events"]:  # type: ignore[index]
         if isinstance(event_payload, dict) and event_payload.get("event_type") == structured_task_record.AGENT_DECISION_EVENT:
@@ -1926,12 +1954,14 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     invalid = run_dir / "structured-invalid.json"
     missing_filter = run_dir / "structured-missing-input-filter.json"
     no_worktree = run_dir / "structured-no-worktree.json"
+    missing_gateway = run_dir / "structured-missing-capability-gateway.json"
     agent_required = run_dir / "structured-agent-required.json"
     history_empty = run_dir / "structured-history-empty.json"
     valid = run_dir / "structured-valid.json"
     invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     missing_filter.write_text(json.dumps(missing_filter_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     no_worktree.write_text(json.dumps(no_worktree_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    missing_gateway.write_text(json.dumps(missing_gateway_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     agent_required.write_text(json.dumps(agent_required_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     history_empty.write_text(json.dumps(history_empty_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1968,6 +1998,34 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
                 "apply",
                 "--json",
                 str(agent_required),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(missing_gateway),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-NOGATEWAY",
             ],
             cwd=root,
             env_root=root,
@@ -2203,6 +2261,8 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         contract_describe,
         init_db,
         agent_required_apply,
+        missing_gateway_apply,
+        missing_gateway_final,
         agent_required_preflight,
         history_empty_apply,
         history_empty_preflight,
@@ -2226,6 +2286,8 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and no_worktree_apply.exit_code == 0
         and no_worktree_preflight.exit_code != 0
         and no_worktree_final.exit_code != 0
+        and missing_gateway_apply.exit_code == 0
+        and missing_gateway_final.exit_code != 0
         and missing_filter_apply.exit_code == 0
         and missing_filter_preflight.exit_code != 0
         and agent_required_apply.exit_code == 0
@@ -2241,6 +2303,7 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and "requirements must contain at least one row" in (invalid_apply.stdout + invalid_apply.stderr)
         and "prewrite runtime adapter requires task worktree evidence" in (no_worktree_preflight.stdout + no_worktree_preflight.stderr)
         and "mutating tasks require worktree evidence" in (no_worktree_final.stdout + no_worktree_final.stderr)
+        and "capability gateway requires event_type=capability-gateway.facts" in (missing_gateway_final.stdout + missing_gateway_final.stderr)
         and "input-filter preflight requires" in (missing_filter_preflight.stdout + missing_filter_preflight.stderr)
         and "agent decision must record" in (agent_required_preflight.stdout + agent_required_preflight.stderr)
         and "history requirement recovery must record" in (history_empty_preflight.stdout + history_empty_preflight.stderr)
@@ -2748,8 +2811,8 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
                 "components",
                 "--event",
                 "user-message",
-                "--kind",
-                "input-filter",
+                "--task-type",
+                "rules-script",
                 "--format",
                 "json",
             ],
@@ -2895,6 +2958,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         all(command.exit_code == 0 for command in commands)
         and generated.exists()
         and "input.filter.user-message-preflight" in component_output
+        and "client.runtime.host-capability-gateway" in component_output
         and "input.filter.user-claim-validation" in component_output
         and "\"fail_policy\": \"fail_closed\"" in component_output
         and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
@@ -2902,6 +2966,8 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "\"client_type\": \"selftest-client\"" in input_filter_output
         and "\"model_id\": \"selftest-model\"" in input_filter_output
         and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
+        and f"\"event_type\": \"{structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT}\"" in input_filter_output
+        and "\"shell_enforcement_mode\": \"non-invasive-command-proxy\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT}\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.USER_CLAIM_VALIDATION_EVENT}\"" in input_filter_output
         and "\"state_db\"" in input_filter_output
@@ -3825,6 +3891,7 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
         pass
     scope_counts = diagnose.get("scope_kind_counts", {}) if isinstance(diagnose.get("scope_kind_counts"), dict) else {}
     auto_intercept = diagnose.get("auto_intercept", {}) if isinstance(diagnose.get("auto_intercept"), dict) else {}
+    non_invasive = diagnose.get("non_invasive", {}) if isinstance(diagnose.get("non_invasive"), dict) else {}
     telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
     proxy = proxy_diagnose.get("command_proxy", {}) if isinstance(proxy_diagnose.get("command_proxy"), dict) else {}
     proxy_task_run = (
@@ -3840,6 +3907,8 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
         and int(diagnose.get("event_count", 0)) >= 1
         and int(telemetry.get("event_count", 0)) >= 1
         and not auto_intercept.get("installed")
+        and non_invasive.get("profile_required") is False
+        and non_invasive.get("user_shell_impact") == "none"
         and not diagnose.get("fail_closed_ready")
         and "shell-adapter-raw-shell-coverage" in fail_closed_output
         and int(proxy.get("event_count", 0)) >= 1

@@ -348,10 +348,11 @@ def diagnose(args: argparse.Namespace) -> int:
     profile_installed = ADAPTER_MARKER_BEGIN in profile_text and ADAPTER_MARKER_END in profile_text
     env_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
     auto_intercept_ready = env_installed or profile_installed
+    local_activation_ready = env_installed
     command_proxy_events = [event for event in adapter_events if is_command_proxy_event(event)]
     command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
     command_proxy_ready = command_proxy_env or bool(command_proxy_events)
-    raw_shell_coverage_ready = auto_intercept_ready or command_proxy_ready
+    raw_shell_coverage_ready = local_activation_ready or command_proxy_ready
     scope_counts = Counter(str(event.get("scope_kind") or "unknown") for event in adapter_events)
     payload = {
         "adapter": "ai_client_governance.py shell-adapter",
@@ -365,6 +366,14 @@ def diagnose(args: argparse.Namespace) -> int:
             "installed": auto_intercept_ready,
             "env_installed": env_installed,
             "profile_installed": profile_installed,
+        },
+        "non_invasive": {
+            "local_activation_ready": local_activation_ready,
+            "command_proxy_ready": command_proxy_ready,
+            "profile_required": False,
+            "profile_touched": False,
+            "user_shell_impact": "none",
+            "policy": "default raw shell coverage accepts only local env activation or no-profile command proxy",
         },
         "command_proxy": {
             "supported_platforms": ["windows-powershell"],
@@ -409,6 +418,7 @@ def diagnose(args: argparse.Namespace) -> int:
         print(f"Installed: {payload['installed']}")
         print(f"Adapter events: {payload['event_count']}")
         print(f"Command proxy events: {payload['command_proxy']['event_count']}")
+        print(f"Non-invasive local activation ready: {payload['non_invasive']['local_activation_ready']}")
         print(f"Raw shell coverage ready: {payload['raw_shell_coverage_ready']}")
         print(f"Fail-closed ready: {payload['fail_closed_ready']}")
         print(f"Scope kinds: {json.dumps(payload['scope_kind_counts'], ensure_ascii=False, sort_keys=True)}")

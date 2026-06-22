@@ -612,8 +612,15 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "event_type": structured_task_record.SHELL_PROXY_USAGE_EVENT,
                 "payload": {
                     "join_point": "write-intent",
-                    "policy": "important Windows PowerShell commands must use shell-adapter proxy-powershell or record a gated exception",
-                    "planned_runner": "shell-adapter proxy-powershell",
+                    "policy": (
+                        "important Windows PowerShell commands must use the non-invasive "
+                        "shell-adapter proxy-powershell command proxy or record a gated exception"
+                    ),
+                    "planned_runner": "shell-adapter proxy-powershell --powershell-command-file",
+                    "enforcement_mode": "non-invasive-command-proxy",
+                    "profile_policy": "no_profile",
+                    "profile_touched": False,
+                    "user_shell_impact": "none",
                     "used_proxy": "pending",
                     "telemetry_evidence": "",
                     "exception_reason": "",
@@ -773,6 +780,32 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                         "budget_seconds": args.budget_seconds,
                         "allow_expensive": args.allow_expensive,
                     },
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-CAPABILITY-GATEWAY",
+                "event_type": structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT,
+                "payload": {
+                    "join_point": "host-capability-boundary",
+                    "lifecycle_input_filter_enforced": True,
+                    "prewrite_runtime_adapter": "task-record gate --event preflight",
+                    "runtime_adapter_components": [
+                        "client.runtime.host-capability-gateway",
+                        "input.filter.user-message-preflight",
+                        "prewrite.gate.approved-task-worktree",
+                        "preflight.interceptor.raw-shell-coverage",
+                    ],
+                    "shell_enforcement_mode": "non-invasive-command-proxy",
+                    "shell_command_proxy": "shell-adapter proxy-powershell",
+                    "profile_policy": "no_profile",
+                    "profile_touched": False,
+                    "user_shell_impact": "none",
+                    "raw_shell_gap_policy": (
+                        "Fail closed for governed commands unless no-profile command proxy, local env "
+                        "activation, or an explicit gated exception is recorded."
+                    ),
+                    "client_runtime_scope": report.classification.scope_kind,
                     "fail_policy": "fail_closed",
                 },
             },

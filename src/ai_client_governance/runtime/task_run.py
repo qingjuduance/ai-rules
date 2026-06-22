@@ -1248,9 +1248,10 @@ def build_diagnostics(
     env_intercept_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
     profile_intercept_installed = profile_has_shell_adapter(profile_path)
     adapter_installed = env_intercept_installed or profile_intercept_installed
+    local_activation_ready = env_intercept_installed
     command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
     command_proxy_ready = command_proxy_env or bool(command_proxy_events)
-    raw_shell_coverage_ready = adapter_installed or command_proxy_ready
+    raw_shell_coverage_ready = local_activation_ready or command_proxy_ready
     scope_kind_counts = Counter(str(event.get("scope_kind") or "unknown") for event in terminal_events)
     shell_adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in shell_adapter_events)
     task_run_tool_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in task_run_tool_events)
@@ -1284,7 +1285,15 @@ def build_diagnostics(
                 "env_installed": env_intercept_installed,
                 "profile_installed": profile_intercept_installed,
                 "profile_path": profile_path,
-                "fail_closed_ready": adapter_installed,
+                "fail_closed_ready": local_activation_ready,
+            },
+            "shell_non_invasive_coverage": {
+                "local_activation_ready": local_activation_ready,
+                "command_proxy_ready": command_proxy_ready,
+                "profile_required": False,
+                "profile_touched": False,
+                "user_shell_impact": "none",
+                "policy": "default raw shell coverage accepts only local env activation or no-profile command proxy",
             },
             "shell_adapter_telemetry": {
                 "event_count": len(shell_adapter_events),
@@ -1498,6 +1507,7 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Raw shell coverage ready: {telemetry_report.get('raw_shell_coverage_ready')}",
         f"Shell adapter auto intercept env: {auto_intercept.get('env_installed')}",
         f"Shell adapter auto intercept profile: {auto_intercept.get('profile_installed')}",
+        f"Shell non-invasive local activation: {telemetry_report.get('shell_non_invasive_coverage', {}).get('local_activation_ready')}",
         f"Shell adapter telemetry events: {shell_adapter_telemetry.get('event_count', 0)}",
         f"Shell command proxy events: {command_proxy.get('event_count', 0)}",
         f"Task-run/tool telemetry events: {task_run_tool_telemetry.get('event_count', 0)}",
