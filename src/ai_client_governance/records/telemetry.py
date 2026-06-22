@@ -19,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from ai_client_governance.common import cli_arguments as common_cli_args
+from ai_client_governance.common.paths import host_project_root
 from ai_client_governance.records import state_store
 
 
@@ -152,17 +153,6 @@ def env_for_child(
     if context.tracestate:
         child["TRACESTATE"] = context.tracestate
     return child
-
-
-def host_project_root(root: Path) -> Path:
-    resolved = root.resolve()
-    parts = resolved.parts
-    for index in range(len(parts) - 2):
-        if parts[index : index + 3] == (".ai-client", "project", ".worktree"):
-            host = Path(*parts[:index])
-            if (host / ".ai-client" / "project").exists():
-                return host
-    return resolved
 
 
 def db_path(root: Path, override: str | None = None) -> Path:
@@ -315,6 +305,142 @@ def sanitize_mapping(value: dict[str, Any]) -> dict[str, Any]:
 def subject_hash(subject: str) -> str:
     normalized = re.sub(r"\s+", " ", (subject or "").strip())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _command_contains_unstable_inline_python(command: str) -> bool:
+    for match in re.finditer(r"(?i)(^|\s)(?P<exe>\"[^\"]+\"|'[^']+'|\S+)\s+-c(?=\s|$)", command or ""):
+        exe = match.group("exe").strip("\"'")
+        basename = exe.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if basename in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
+            return True
+    return False
+
+
+def analyze_powershell_inline_command(command: str, *, command_file_used: bool = False) -> dict[str, Any]:
+    """Return a small risk hint for command strings that are often misparsed inline."""
+    if command_file_used:
+        return {}
+    text = command or ""
+    lowered = text.lower()
+    reasons: list[str] = []
+    if _command_contains_unstable_inline_python(text) and not command_file_used:
+        reasons.append("python-c-inline")
+    if ("--payload-json" in lowered or "--metadata" in lowered) and any(char in text for char in "{}[]"):
+        reasons.append("inline-json")
+    if "`" in text:
+        reasons.append("powershell-backtick")
+    if ("'" in text and '"' in text) or text.count('"') >= 4:
+        reasons.append("mixed-quotes")
+    if re.search(r"\$[A-Za-z_][\w:]*\s*=", text) and (";" in text or "\n" in text):
+        reasons.append("powershell-variable-assignment")
+    if text.count(";") >= 3:
+        reasons.append("many-statements")
+    if not reasons:
+        return {}
+    return {
+        "risk": "inline-command-quoting",
+        "reasons": sorted(set(reasons)),
+        "recommended_runner": "shell-adapter proxy-powershell --powershell-command-file",
+        "preventive_rule": "Put complex PowerShell, python -c, JSON, mixed quotes, and multi-statement logic in a UTF-8 command file.",
+    }
+
+
+def classify_command_error(
+    command: str,
+    *,
+    exit_code: int | None = None,
+    parser_or_shell: str = "",
+    command_file_used: bool = False,
+    stderr_tail: str = "",
+) -> dict[str, Any]:
+    """Classify failed command spans into stable, reportable buckets."""
+    if exit_code in (None, 0):
+        return {}
+    text = command or ""
+    lowered = text.lower()
+    parser = parser_or_shell or "unknown"
+    category = "unclassified_command_failure"
+    root_cause = "Command exited non-zero and no more specific failure pattern was recognized."
+    corrected_command = "Inspect the failed command, classify the root cause, then retry once with a corrected command."
+    preventive_rule = "Record command-error.analysis with failure_category, corrected_command, retry_count, and dedupe_key before another retry."
+    retry_policy = "classify_before_retry"
+    suggested_runner = "task-run plan/run or shell-adapter proxy-powershell"
+    requires_command_file = False
+
+    if _command_contains_unstable_inline_python(text):
+        category = "python_c_inline_quoting"
+        root_cause = "Inline python -c code is fragile through PowerShell and proxy quoting layers."
+        corrected_command = "Move the Python snippet into a temporary .py file or execute it through a UTF-8 PowerShell command file."
+        preventive_rule = "Do not pass quote-heavy python -c through inline PowerShell; use a file-backed command template."
+        retry_policy = "rewrite_with_file_before_retry"
+        suggested_runner = "shell-adapter proxy-powershell --powershell-command-file"
+        requires_command_file = True
+    elif ("--payload-json" in lowered or "--metadata" in lowered) and any(char in text for char in "{}[]"):
+        category = "inline_json_quoting"
+        root_cause = "Inline JSON is likely to be altered by shell argument parsing."
+        corrected_command = "Write JSON to a UTF-8 file and pass the command's --payload-file, --metadata-file, or equivalent file option."
+        preventive_rule = "Do not pass strict JSON as an inline PowerShell argument when a file option exists."
+        retry_policy = "rewrite_with_file_before_retry"
+        suggested_runner = "command-specific file argument"
+        requires_command_file = True
+    elif analyze_powershell_inline_command(text, command_file_used=command_file_used):
+        category = "powershell_inline_complex_command"
+        root_cause = "Complex inline PowerShell has variables, quotes, backticks, or many statements that are easy to misparse."
+        corrected_command = "Put the full PowerShell body in a UTF-8 .ps1 command file and pass --powershell-command-file."
+        preventive_rule = "Use command files for multi-statement PowerShell, variables plus separators, mixed quotes, and backticks."
+        retry_policy = "rewrite_with_command_file_before_retry"
+        suggested_runner = "shell-adapter proxy-powershell --powershell-command-file"
+        requires_command_file = True
+    elif re.search(
+        r"(?i)(^|\s)(ai_client_governance\.py|scripts[\\/]ai_client_governance\.py|\.ai-client[\\/].+ai_client_governance\.py)",
+        text,
+    ) and exit_code == 2:
+        category = "argparse_usage_error"
+        root_cause = "Governance CLI rejected the argument order or option shape."
+        corrected_command = "Run the subcommand --help, then place shared global options where that subparser accepts them."
+        preventive_rule = "For nested governance commands, verify --help once and avoid moving global options after nested subcommands unless documented."
+        retry_policy = "help_then_retry_once"
+        suggested_runner = "governance CLI with verified option order"
+    elif re.match(r"(?i)^\s*git(\.exe)?\s+", text):
+        category = "git_command_failed"
+        root_cause = "Git returned a non-zero exit code; this may be dirty state, missing ref, merge conflict, or branch safety policy."
+        corrected_command = "Inspect git status, branch/ref existence, and merge state before retrying the specific git operation."
+        preventive_rule = "Do not repeat failed Git writes blindly; record dirty/ref/conflict facts first."
+        retry_policy = "inspect_git_state_before_retry"
+        suggested_runner = "worktree-task or task-run with git state precheck"
+    elif re.match(r"(?i)^\s*(cd|push-location|set-location)\b", text):
+        category = "working_directory_command_failed"
+        root_cause = "Directory change command failed or was used where tool cwd should be set explicitly."
+        corrected_command = "Set the command working directory through the runner cwd argument instead of chaining cd."
+        preventive_rule = "Prefer runner cwd/workdir over inline cd/Push-Location for single-command tool calls."
+        retry_policy = "set_runner_cwd_before_retry"
+        suggested_runner = "runner cwd/workdir"
+
+    if stderr_tail:
+        lowered_stderr = stderr_tail.lower()
+        if "not recognized as the name of a cmdlet" in lowered_stderr:
+            category = "powershell_command_not_found"
+            root_cause = "PowerShell treated a token as a command, often because quoting stripped string delimiters."
+            corrected_command = "Rebuild the command with a command file or quote-free argument list before retrying."
+            retry_policy = "rewrite_before_retry"
+            suggested_runner = "shell-adapter proxy-powershell --powershell-command-file"
+            requires_command_file = True
+
+    normalized_command = re.sub(r"\s+", " ", text).strip()
+    dedupe_material = f"{category}\n{normalized_command}"
+    return {
+        "failure_category": category,
+        "parser_or_shell": parser,
+        "exit_code": exit_code,
+        "root_cause": root_cause,
+        "corrected_command": corrected_command,
+        "retry_policy": retry_policy,
+        "dedupe_key": subject_hash(dedupe_material)[:20],
+        "preventive_rule": preventive_rule,
+        "suggested_runner": suggested_runner,
+        "requires_command_file": requires_command_file,
+        "stderr_tail_available": bool(stderr_tail),
+    }
 
 
 def subject_from_event(event: dict[str, Any]) -> tuple[str, str]:
@@ -683,8 +809,61 @@ def duration_stats(values: list[int]) -> dict[str, int | float | None]:
     }
 
 
-def compact_span(span: dict[str, Any]) -> dict[str, Any]:
+def command_error_from_span(span: dict[str, Any]) -> dict[str, Any]:
+    attributes = span.get("attributes")
+    attrs = attributes if isinstance(attributes, dict) else {}
+    existing = attrs.get("command_error")
+    if isinstance(existing, dict):
+        return existing
+    if span.get("status") == "failed" or span.get("exit_code") not in (None, 0):
+        return classify_command_error(
+            str(span.get("subject_redacted") or ""),
+            exit_code=as_int(span.get("exit_code")),
+            parser_or_shell=str(span.get("adapter_enforcement") or span.get("event_type") or "unknown"),
+        )
+    return {}
+
+
+def inline_warning_from_span(span: dict[str, Any]) -> dict[str, Any]:
+    attributes = span.get("attributes")
+    attrs = attributes if isinstance(attributes, dict) else {}
+    shell_adapter = attrs.get("shell_adapter")
+    shell = shell_adapter if isinstance(shell_adapter, dict) else {}
+    warning = shell.get("inline_command_warning")
+    return warning if isinstance(warning, dict) else {}
+
+
+def summarize_command_errors(
+    command_errors: list[dict[str, Any]],
+    *,
+    failure_count: int,
+    top: int = 10,
+) -> dict[str, Any]:
+    failure_category_counts = Counter(
+        str(item.get("failure_category") or "unclassified_command_failure") for item in command_errors
+    )
+    unclassified_count = int(failure_category_counts.get("unclassified_command_failure", 0))
+    unclassified_count += max(0, failure_count - len(command_errors))
+    classified_count = max(
+        0,
+        len(command_errors) - int(failure_category_counts.get("unclassified_command_failure", 0)),
+    )
     return {
+        "classified_failure_count": classified_count,
+        "unclassified_failure_count": unclassified_count,
+        "command_file_required_count": len([item for item in command_errors if item.get("requires_command_file")]),
+        "failure_categories": dict(failure_category_counts),
+        "top_dedupe_keys": [
+            {"dedupe_key": key, "count": count}
+            for key, count in Counter(
+                str(item.get("dedupe_key") or "") for item in command_errors if item.get("dedupe_key")
+            ).most_common(top)
+        ],
+    }
+
+
+def compact_span(span: dict[str, Any]) -> dict[str, Any]:
+    row = {
         "name": span.get("name") or "",
         "phase": span.get("phase") or "",
         "event_type": span.get("event_type") or "",
@@ -695,6 +874,18 @@ def compact_span(span: dict[str, Any]) -> dict[str, Any]:
         "summary": span.get("summary") or "",
         "subject": span.get("subject_redacted") or "",
     }
+    command_error = command_error_from_span(span)
+    if command_error:
+        row["command_error"] = {
+            "failure_category": command_error.get("failure_category", ""),
+            "dedupe_key": command_error.get("dedupe_key", ""),
+            "retry_policy": command_error.get("retry_policy", ""),
+            "requires_command_file": bool(command_error.get("requires_command_file")),
+        }
+    inline_warning = inline_warning_from_span(span)
+    if inline_warning:
+        row["inline_command_warning"] = inline_warning
+    return row
 
 
 def is_validation_span(span: dict[str, Any]) -> bool:
@@ -840,12 +1031,24 @@ def compact_metrics(spans: list[dict[str, Any]]) -> dict[str, Any]:
         for span in terminal
         if span.get("status") == "failed" or (span.get("exit_code") not in (None, 0))
     ]
+    command_errors = [command_error_from_span(span) for span in failures]
+    command_errors = [item for item in command_errors if item]
+    command_error_summary = summarize_command_errors(command_errors, failure_count=len(failures), top=10)
+    inline_warnings = [inline_warning_from_span(span) for span in terminal]
+    inline_warnings = [item for item in inline_warnings if item]
     subjects = Counter(str(span.get("subject_redacted") or "") for span in terminal if span.get("subject_redacted"))
     return {
         "span_count": len(spans),
         "terminal_span_count": len(terminal),
         "failed_count": len(failures),
         "failure_rate": (len(failures) / len(terminal)) if terminal else 0,
+        "command_error": {
+            **command_error_summary,
+            "inline_command_warning_count": len(inline_warnings),
+            "inline_command_warning_reasons": dict(
+                Counter(reason for warning in inline_warnings for reason in warning.get("reasons", []))
+            ),
+        },
         "duration_ms": duration_stats(durations),
         "validation_duration_ms": duration_stats(validation),
         "cache": {
@@ -925,6 +1128,11 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         for span in terminal
         if span.get("status") == "failed" or (span.get("exit_code") not in (None, 0))
     ]
+    command_errors = [command_error_from_span(span) for span in failures]
+    command_errors = [item for item in command_errors if item]
+    command_error_summary = summarize_command_errors(command_errors, failure_count=len(failures), top=args.top)
+    inline_warnings = [inline_warning_from_span(span) for span in terminal]
+    inline_warnings = [item for item in inline_warnings if item]
     identity_attrs = [span.get("attributes") for span in terminal if isinstance(span.get("attributes"), dict)]
     client_type_counts = Counter(str(attr.get("client_type") or "unknown") for attr in identity_attrs)
     model_counts = Counter(str(attr.get("model_id") or "unknown") for attr in identity_attrs)
@@ -950,6 +1158,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "terminal_span_count": len(terminal),
         "failed_count": len(failures),
         "failure_rate": (len(failures) / len(terminal)) if terminal else 0,
+        "command_error": {
+            **command_error_summary,
+            "inline_command_warning_count": len(inline_warnings),
+            "inline_command_warning_reasons": dict(
+                Counter(reason for warning in inline_warnings for reason in warning.get("reasons", []))
+            ),
+        },
         "duration_ms": duration_stats(durations),
         "duration_by_phase": duration_by_phase,
         "slowest_spans": [
@@ -988,7 +1203,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             Counter(str(span.get("adapter_enforcement") or "none") for span in terminal)
         ),
         "trace_context": build_trace_context_summary(spans, args.top),
-        "latest_spans": terminal[-args.top :],
+        "latest_spans": [compact_span(span) for span in terminal[-args.top :]],
     }
 
 
@@ -1135,6 +1350,7 @@ def build_effectiveness_trend(args: argparse.Namespace) -> dict[str, Any]:
 def format_text(report: dict[str, Any]) -> str:
     duration = report["duration_ms"]
     cache = report["cache"]
+    command_error = report.get("command_error", {})
     lines = [
         "AI Client Governance Execution Telemetry Report",
         f"DB: {report['db']}",
@@ -1146,11 +1362,32 @@ def format_text(report: dict[str, Any]) -> str:
             f"p95={duration['p95']} max={duration['max']}"
         ),
         f"Cache: hits={cache['hits']} misses={cache['misses']}",
+        (
+            "Command errors: "
+            f"classified={command_error.get('classified_failure_count', 0)} "
+            f"unclassified={command_error.get('unclassified_failure_count', 0)} "
+            f"command_file_required={command_error.get('command_file_required_count', 0)} "
+            f"inline_warnings={command_error.get('inline_command_warning_count', 0)}"
+        ),
         "",
         "Top operations:",
     ]
     for row in report["top_operations"]:
         lines.append(f"  {row['name']}: count={row['count']}")
+    lines.append("")
+    lines.append("Failure categories:")
+    categories = command_error.get("failure_categories", {})
+    if categories:
+        for category, count in sorted(categories.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"  {category}: count={count}")
+    else:
+        lines.append("  none")
+    warning_reasons = command_error.get("inline_command_warning_reasons", {})
+    if warning_reasons:
+        lines.append("Inline command warning reasons:")
+        for reason, count in sorted(warning_reasons.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"  {reason}: count={count}")
+        lines.append("  recommended_runner=shell-adapter proxy-powershell --powershell-command-file")
     lines.append("")
     lines.append("Top subjects:")
     for row in report["top_subjects"]:
@@ -1211,6 +1448,7 @@ def format_text(report: dict[str, Any]) -> str:
 def format_markdown(report: dict[str, Any]) -> str:
     duration = report["duration_ms"]
     cache = report["cache"]
+    command_error = report.get("command_error", {})
     lines = [
         "# AI Client Governance Execution Telemetry Report",
         "",
@@ -1223,12 +1461,39 @@ def format_markdown(report: dict[str, Any]) -> str:
             f"p95={duration['p95']} max={duration['max']}"
         ),
         f"- Cache: hits={cache['hits']} misses={cache['misses']}",
+        (
+            f"- Command errors: classified={command_error.get('classified_failure_count', 0)} "
+            f"unclassified={command_error.get('unclassified_failure_count', 0)} "
+            f"command_file_required={command_error.get('command_file_required_count', 0)} "
+            f"inline_warnings={command_error.get('inline_command_warning_count', 0)}"
+        ),
         "",
+        "## Failure Categories",
+        "",
+        "| Category | Count |",
+        "| --- | ---: |",
+    ]
+    categories = command_error.get("failure_categories", {})
+    if categories:
+        for category, count in sorted(categories.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"| `{category}` | {count} |")
+    else:
+        lines.append("| `none` | 0 |")
+    warning_reasons = command_error.get("inline_command_warning_reasons", {})
+    if warning_reasons:
+        lines.extend(["", "## Inline Command Warnings", "", "| Reason | Count |", "| --- | ---: |"])
+        for reason, count in sorted(warning_reasons.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"| `{reason}` | {count} |")
+        lines.append("")
+        lines.append("Recommended runner: `shell-adapter proxy-powershell --powershell-command-file`.")
+    lines.extend(
+        [
         "## Top Operations",
         "",
         "| Operation | Count |",
         "| --- | ---: |",
-    ]
+        ]
+    )
     for row in report["top_operations"]:
         lines.append(f"| `{row['name']}` | {row['count']} |")
     lines.extend(["", "## Top Subjects", "", "| Count | Subject |", "| ---: | --- |"])

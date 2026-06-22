@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common import cli_arguments as common_cli_args
-from ai_client_governance.common.paths import CORRECTIONS_DIR, STRUCTURED_DB_PATH
+from ai_client_governance.common.paths import CORRECTIONS_DIR, structured_db_path
 from ai_client_governance.common.time_utils import now_iso
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -40,10 +40,7 @@ OPEN_STATUSES = {"open", "in_progress", "deferred"}
 
 
 def db_path(root: Path, override: str | None) -> Path:
-    if override:
-        path = Path(override)
-        return path if path.is_absolute() else root / path
-    return root / STRUCTURED_DB_PATH
+    return structured_db_path(root, override)
 
 
 def connect(path: Path) -> sqlite3.Connection:

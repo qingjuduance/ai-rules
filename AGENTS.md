@@ -39,6 +39,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **DB 是唯一活体治理状态**：任务队列、结构化任务记录、sync-check 结果、worktree
   live-state、lifecycle 状态和可查询审计事实默认写入 `.ai-client/project/state/aicg.db`。
   JSON/Markdown 只能通过显式导出命令输出给人读，不能作为后续机器逻辑的默认输入。
+- **默认 DB 路径归宿主项目**：从嵌入式 `.ai-client/ai-client-governance/` 仓库或
+  `.ai-client/project/.worktree/<task-slug>/` 任务 worktree 中运行治理 CLI 时，未显式传
+  `--db` 的结构化状态命令必须解析到宿主项目 `.ai-client/project/state/aicg.db`。
+  不能在治理仓库或任务 worktree 内部自动创建新的 `.ai-client/project/state/aicg.db`；
+  隔离测试只能通过 `AICG_STATE_DB` 或显式 `--db` 写到声明的 run directory。
 - **宿主只追踪稳定治理资产**：宿主 Git 只能追踪 `.ai-client/ai-client-governance`
   的 gitlink、治理配置、项目规则、项目 skills/tools、人读 records 和 agent brief。
   `.ai-client/project/state/`、`logs/`、`tmp/`、`cache/`、`.worktree/`、`doc-index/`、
@@ -197,6 +202,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
    - 只读和验证命令通过 `task-run run` 或 `gate-pool` 的可并行组执行，支持缓存。
    - 状态变更、Git 写入、锁和 task-record 写入必须顺序执行且不可缓存。
    - 所有命令必须通过 `shell-adapter proxy-powershell` 代理，禁止裸 shell。
+   - 高风险 inline PowerShell 不能继续依赖人工转义经验；代理默认应把复杂 inline
+     命令重写为临时 UTF-8 command file 执行，或在明确要求时 fail closed。
    - 每次调用写入 `execution_spans`/`execution_events` telemetry。
 4. **文件修改前后**：
    - 修改前运行 `lifecycle preflight`（分析契约、approval、scope、shell proxy 等）。
@@ -236,8 +243,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
    90s、full profile 预算 600s；预算不足时拆任务或升级。慢检查归因和冗余检测写入
    `validation_attribution`。
 7. **telemetry 归因**：`telemetry report` 输出 top operations、slowest spans、
-   cache hit/miss、重复 subject、adapter enforcement 分布；`task-run diagnose`
-   暴露失败 telemetry、重复命令、missing worktree session 和 raw shell gap。
+   cache hit/miss、重复 subject、adapter enforcement 分布、命令失败分类、
+   未分类失败数、需要 command file 的失败数和 inline command warning；`task-run diagnose`
+   暴露失败 telemetry、重复命令、missing worktree session、command-file-required
+   failures 和 raw shell gap。
 8. **live gate 收口**：`worktree-task finalize --require-merged --require-no-task-worktrees`
    确认无残留 worktree；`file-ownership audit --strict` 确认 live-state 未被 Git 追踪；
    宿主 closeout 检查 submodule gitlink、task tracking 和宿主脏改动。
@@ -253,6 +262,54 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 | 验证 | completion-test 规划执行 | completion-test 输出、validations |
 | commit | task-run 治理链路 | task-record gate final、task-gate |
 | 收口 | worktree closeout、状态刷新 | session-gate、telemetry、live gate |
+
+### 全局命令族与生命周期地图
+
+后续 AI 处理 `ai-client-governance` 时，先按本地图定位能力归属，避免每轮重新扫描
+整仓库、重复试错命令或把散文规则当成强制执行：
+
+| 生命周期/问题域 | 事实源或代码域 | 首选命令族 | 收口证据 |
+|---|---|---|---|
+| 入口和同步 | `sync/`、根 adapter、manifest | `sync-check`、`rule-audit`、`runtime manifest-report` | 同步 warning/OK、adapter 边界、manifest 零漂移 |
+| 用户输入和分析契约 | `lifecycle/`、`runtime/registry.py`、`records/task_record.py` | `lifecycle input-filter/preflight/finalize`、`contract describe` | REQ、claim、client identity、agent decision、analysis-contract 事件 |
+| 队列与任务记录 | `records/task_queue.py`、`records/task_record.py`、`records/state_store.py` | `task-queue lifecycle/transition`、`task-record init/apply/gate/status` | queue 与 task-record 无阻断漂移、requirements 和 outputs 闭合 |
+| worktree 与协作锁 | `worktree/task.py`、`worktree/coord.py` | `worktree-task create/status/reconcile/finalize/closeout-all/host-closeout`、`worktree-coord` | Git live state、coord session、lock、branch/merge/push 状态一致 |
+| 命令规划和执行 | `runtime/task_run.py`、`runtime/shell_adapter.py`、`gates/policy.py` | `task-run plan/run/diagnose`、`shell-adapter proxy-powershell/diagnose`、`policy assess` | command-compression、policy、shell proxy、command-error telemetry |
+| telemetry 和调用链 | `records/telemetry.py`、`records/tool_flow.py`、`records/tool_invocations.py` | `telemetry report/effectiveness/snapshot/trend`、`tool-flow`、`tool-invocations` | compact trace、失败分类、耗时归因、重复命令和 raw shell gap |
+| 文档和引用 | `docs/doc_index.py`、`docs/validate_doc_task.py` | `doc-index check/build`、`validate-doc` | 目录事件冒泡、断链/入链/锚点、doc-impact 或 no-impact facts |
+| 门禁和完成测试 | `gates/`、`validation/completion.py`、`validation/selftest.py` | `gate-pool`、`task-gate`、`session-gate`、`completion-test`、`selftest` | 聚合后门禁、验证预算、focused/full 检查和 selftest 结果 |
+| 文件归属和安全边界 | `audit/file_ownership.py`、`gates/architecture_guard.py` | `file-ownership audit`、`architecture-guard`、`validate-encoding` | ignored runtime、无 tracked live-state、编码和架构边界通过 |
+| corrections 和框架债 | `records/corrections.py`、`records/framework_debt.py`、`records/scan_corrections.py` | `corrections`、`scan-corrections`、`framework-debt list/report/add --replace` | correction 生命周期、开放 P0/P1/P2 debt 和 next trigger 可见 |
+| 多 agent 协作 | `agents/comm.py`、`agents/group_status.py` | `agent-comm`、`agent-groups`、`templates agent-brief` | brief、reuse key、heartbeat、capsule、review pass/fail 结论 |
+
+命令族使用原则：
+
+- 先用 `python scripts/ai_client_governance.py --list` 确认入口存在；需要命令细节时用
+  对应子命令 `--help`，不要猜参数顺序。发现 nested argparse 顺序问题时，把 root/global
+  参数放在支持的位置，并把缺陷登记到 `framework-debt`，不要反复试错。
+- 只读诊断、文档检查、manifest 检查、telemetry 报告和 status 查询可以并行；会写 DB、
+  改文件、改 Git、改 lock/session、transition 或 closeout 的命令必须按生命周期顺序串行。
+- 每次新增 CLI、runtime component、gate、状态表或 artifact 类型，都必须同步更新本地图、
+  README、manifest 和 selftest/focused regression；如果只能先设计，必须登记
+  `design_only` 或 framework-debt，不能声称已强制执行。
+- 运行输出可能很长的命令时，优先选择 `--format json` 加 task/trace/time 过滤、`--top`
+  或 compact 报告；读取长中文规则用 `context-extract` 或行号范围，避免终端截断造成
+  token 浪费和漏读。
+
+### 运行态产物生命周期
+
+- 默认活体状态只写宿主项目 `.ai-client/project/state/aicg.db`。从治理仓库本身或
+  `.ai-client/project/.worktree/<task-slug>/` 运行 CLI 时，不得在当前 cwd 下新建
+  `.ai-client/project/state/aicg.db`；隔离测试必须显式使用 `AICG_STATE_DB` 或 `--db`。
+- `tmp/`、`cache/`、`logs/`、`doc-index/`、`lifecycle/`、`agents/comm/groups/`、
+  `agents/groups/`、`.worktree/` 和 Python `__pycache__` 都是运行态或临时产物。
+  它们必须有 owner command、artifact manifest、allowed path 和 cleanup/reconcile 策略；
+  未声明产物出现在任务 worktree 时是 dirty blocker。
+- selftest、doc-index、gate-pool、completion-test 和临时探针不得为了方便写入源码目录。
+  如果发现未跟踪 `.ai-client/`、DB、doc-index、pycache 或 lifecycle 产物，先定位 owner
+  command，修默认路径或补隔离参数，再删除运行态；不能把它们 stage 成源码改动。
+- `file-ownership audit --strict` 是宿主边界门禁；`git status` 只能告诉当前脏不脏，
+  不能证明 `.ai-client` 运行态归属正确。
 
 ## 会话同步
 
@@ -512,14 +569,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `task-run diagnose --require-raw-shell-coverage` 或
   `shell-adapter diagnose --require-raw-shell-coverage` fail closed。
 - 使用 Windows PowerShell 代理时，简单命令可用 `--powershell-command`；复杂命令、
-  管道、正则 `|`、变量、重定向、多命令组、here-string、嵌套引号、多行命令或包含大量
-  参数的命令必须优先使用 `--powershell-command-file` 读取 UTF-8 命令文件，避免 shell
-  多层转义破坏参数。命令文件是任务临时输入，不写用户 profile，不作为默认状态源；用完
-  后按 artifact ownership 规则清理或声明保留原因。因工具限制暂时不能使用代理时，
-  必须在 task record 写入 `events.event_type=shell-proxy-usage.analysis`，记录
-  `exception_reason`、补偿验证和剩余 raw shell gap；收口时如果记录
-  `used_proxy=true`，还必须写入 `telemetry_evidence` 或 `proxy_invocation_id`，
-  不能只在对话里解释。
+  管道、正则 `|`、变量、重定向、多命令组、here-string、嵌套引号、多行命令、inline JSON、
+  `python -c` 或包含大量参数的命令必须走文件化执行，避免 shell 多层转义破坏参数。
+  `shell-adapter proxy-powershell` 默认会对高风险 inline 命令生成临时 UTF-8
+  `AicgUserCommand.ps1` 并通过 wrapper `-File` 执行，telemetry 中必须能看到
+  `command_file_used=true` 和 `command_file_source=auto|provided`。需要强制阻断而不是自动重写时，
+  使用 `--no-auto-command-file --fail-on-inline-risk`，风险命令必须在 subprocess 前退出。
+  用户或脚本已经有稳定命令文件时，优先显式传 `--powershell-command-file`。命令文件是任务临时输入，
+  不写用户 profile，不作为默认状态源；用完后按 artifact ownership 规则清理或声明保留原因。
+  因工具限制暂时不能使用代理时，必须在 task record 写入
+  `events.event_type=shell-proxy-usage.analysis`，记录 `exception_reason`、补偿验证和剩余
+  raw shell gap；收口时如果记录 `used_proxy=true`，还必须写入 `telemetry_evidence` 或
+  `proxy_invocation_id`，不能只在对话里解释。
 - 多命令组必须 fail closed：任何关键命令失败后要立即退出或使用能传播失败的
   task-run/gate-pool 节点；不得让后续成功命令掩盖前序失败。发现代理、task-run 或
   closeout 脚本掩盖中间失败时，按高严重度 correction 处理并补回验证。
@@ -618,10 +679,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `failed_command`、`exit_code`、`phase`、`parser_or_shell`、`failure_category`、
   `root_cause`、`corrected_command`、`retry_count`、`dedupe_key`、`preventive_rule`、
   `telemetry_span_id` 或 telemetry 查询条件、是否影响仓库状态、是否需要 framework-debt。
-  常见分类包括 `powershell_pipe_parsing`、`powershell_interpolation_colon`、
-  `argparse_wrong_option`、`missing_path`、`policy_blocked_expected`、`validation_failure`、
-  `git_dirty_blocker` 和 `raw_shell_gap`。同一 `dedupe_key` 重复出现时必须进入
-  `task-run diagnose`/telemetry 报告或 framework-debt，作为命令错误拦截器输入。
+  当前运行时分类至少包括 `python_c_inline_quoting`、`inline_json_quoting`、
+  `powershell_inline_complex_command`、`argparse_usage_error`、`git_command_failed`、
+  `working_directory_command_failed`、`powershell_command_not_found` 和
+  `unclassified_command_failure`。分类不能只用于事后报告：需要 command file 的分类必须改用
+  文件化命令或触发 fail-closed；`unclassified_command_failure` 必须保留为未识别盲区，
+  不能被统计成已分类成功。同一 `dedupe_key` 重复出现时必须进入
+  `task-run diagnose`/telemetry 报告或 framework-debt，作为命令错误拦截器和命令模板重构输入。
+- `telemetry report` 和 `task-run diagnose` 是命令错误看板，不是大 JSON 倾倒入口。
+  默认使用 `--task-id`、`--trace-id`、`--since`、`--until`、`--top` 收敛范围；
+  `tool-flow --format json` 默认必须输出 compact invocation 并省略 raw payload，
+  只有取证时才显式使用 `--include-raw-json`。发现报告输出被截断、raw payload 过大或
+  latest spans 携带完整原始事件时，按 P0 命令效率问题处理。
 - 裸 `git add`、`git commit`、`git merge`、`git push`、`git rm`、`git mv` 不是
   governance-native 写入。即使它们通过 `shell-adapter proxy-powershell` 执行，也只能说明
   shell 有 telemetry；stage/commit/merge/push 仍必须经过 `policy assess`、`task-run run`
@@ -631,6 +700,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 发现“设计不好但需要框架级改造窗口才能统一处理”的问题时，写入
   `framework-debt` 表，而不是散落在对话或临时注释里。入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py framework-debt ...`；
+  已登记的 P1 架构项必须继续从 DB 读 live status，不要把 AGENTS 散文当成完成态。
+  当前已知 P1 包括：doc-index 事件冒泡自动写 task record/final gate 证据、
+  design-package handoff/review workflow、runtime registry/manifest declarative generation、
+  task queue/task-record lifecycle 进一步统一。已经有代码或 selftest 的项只能按
+  `in_progress` 描述剩余 gap；尚未实现自动 gate 的项必须保持 `design_only` 或 open debt，
+  不能因为写入规则就声称已强制生效。
   记录至少包含问题、影响、期望改法、为什么需要框架改造、当前 workaround、
   下次触发条件和关联任务。
 - 计划、恢复或收口治理架构任务时，必须让开放架构债可见：使用
@@ -703,6 +778,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或隔离测试可把同类路径重定向到自己的 run directory，并在 artifact manifest 中声明。
 - selftest 或隔离测试需要写治理状态时，必须用 `AICG_STATE_DB` 或显式 `--db` 指向
   run directory 内的临时 SQLite；不能为了测试方便把默认 DB 降级成 JSON/JSONL 状态源。
+- 普通治理 CLI 命令即使从 `.ai-client/ai-client-governance/` 或任务 worktree cwd 运行，
+  默认状态 DB 也必须落到宿主项目 `.ai-client/project/state/aicg.db`。如果发现当前
+  worktree 内出现未跟踪 `.ai-client/project/state/aicg.db`，应视为脚本路径解析缺陷或
+  漏传隔离 `--db` 的测试缺陷，先修代码/测试并删除该运行态产物，不能把它当作源码改动保留。
 - selftest、doc-index、completion-test、gate-pool 或临时探针产生的 `.ai-client/project/tmp/`、
   `doc-index/`、`cache/`、`lifecycle/`、`__pycache__/` 等产物必须有 owner command、
   artifact manifest、allowed path 和 cleanup/reconcile 策略。产物出现在任务 worktree 中且
@@ -869,6 +948,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或等价 focused gate，证明 runtime registry、manifest 和 README 没有继续手工漂移。
 - 规则/脚本强制执行能力变更后，收口前必须运行：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
+  涉及 DB/doc-index 运行态路径、命令错误、shell-adapter、telemetry 或 tool-flow 的改动还必须覆盖
+  `state-db-defaults-to-host-from-worktree-cwd`、`doc-index-defaults-to-host-from-worktree-cwd`、
+  `command-error-taxonomy-and-compact-flow` 或等价 focused regression，证明任务 worktree cwd
+  不会生成本地 `.ai-client/`，高风险 inline 命令会文件化或 fail closed，JSON 调用链默认 compact。
 - 通用 execution telemetry 记录入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry record ...`。
 - 命令适配器入口：

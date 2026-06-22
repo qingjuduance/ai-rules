@@ -3963,6 +3963,214 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
     )
 
 
+def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "command-error-taxonomy.db"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "run",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--",
+                sys.executable,
+                "-c",
+                "import sys; sys.exit(7)",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "run",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--",
+                sys.executable,
+                "--definitely-not-a-real-option",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "proxy-powershell",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--powershell-command",
+                "$first = 1; $second = 2; Write-Output ($first + $second)",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
+                "report",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-run",
+                "diagnose",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "tool-flow",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--format",
+                "json",
+                "--top",
+                "20",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    telemetry_report: dict[str, object] = {}
+    diagnose: dict[str, object] = {}
+    flow: dict[str, object] = {}
+    try:
+        telemetry_report = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    try:
+        diagnose = json.loads(commands[4].stdout)
+    except json.JSONDecodeError:
+        pass
+    try:
+        flow = json.loads(commands[5].stdout)
+    except json.JSONDecodeError:
+        pass
+    command_error = (
+        telemetry_report.get("command_error", {})
+        if isinstance(telemetry_report.get("command_error"), dict)
+        else {}
+    )
+    categories = (
+        command_error.get("failure_categories", {})
+        if isinstance(command_error.get("failure_categories"), dict)
+        else {}
+    )
+    telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
+    diagnose_categories = (
+        telemetry.get("failure_categories", {})
+        if isinstance(telemetry.get("failure_categories"), dict)
+        else {}
+    )
+    invocations = flow.get("invocations", []) if isinstance(flow.get("invocations"), list) else []
+    failed_invocations = [
+        item
+        for item in invocations
+        if isinstance(item, dict)
+        and item.get("status") == "failed"
+        and isinstance(item.get("command_error"), dict)
+    ]
+    failed_categories = [
+        item.get("command_error", {}).get("failure_category")
+        for item in failed_invocations
+    ]
+    json_policy = flow.get("json_policy", {}) if isinstance(flow.get("json_policy"), dict) else {}
+    passed = (
+        commands[0].exit_code == 7
+        and commands[1].exit_code != 0
+        and commands[2].exit_code == 0
+        and all(command.exit_code == 0 for command in commands[3:])
+        and categories.get("python_c_inline_quoting", 0) >= 1
+        and categories.get("unclassified_command_failure", 0) >= 1
+        and int(command_error.get("classified_failure_count", 0)) >= 1
+        and int(command_error.get("unclassified_failure_count", 0)) >= 1
+        and int(command_error.get("command_file_required_count", 0)) >= 1
+        and int(command_error.get("inline_command_warning_count", 0)) >= 1
+        and diagnose_categories.get("python_c_inline_quoting", 0) >= 1
+        and diagnose_categories.get("unclassified_command_failure", 0) >= 1
+        and int(telemetry.get("unclassified_failure_count", 0)) >= 1
+        and int(telemetry.get("command_file_required_failure_count", 0)) >= 1
+        and json_policy.get("raw_omitted") is True
+        and "python_c_inline_quoting" in failed_categories
+        and "unclassified_command_failure" in failed_categories
+        and all("raw" not in item for item in failed_invocations)
+    )
+    return TestResult(
+        name="command-error-taxonomy-and-compact-flow",
+        passed=passed,
+        summary=(
+            "failed commands are classified and tool-flow JSON omits raw payloads by default"
+            if passed
+            else "command-error taxonomy or compact tool-flow regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
     from ai_client_governance.worktree.task import closeout_owned_host_paths
 
@@ -4717,6 +4925,85 @@ def test_framework_debt_report(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_state_db_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path) -> TestResult:
+    host = run_dir / "state-db-host-root-project"
+    worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
+    (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+    worktree_cwd.mkdir(parents=True, exist_ok=True)
+    command = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "framework-debt",
+            "list",
+            "--format",
+            "json",
+        ],
+        cwd=worktree_cwd,
+        env_root=root,
+    )
+    payload: dict[str, object] = {}
+    try:
+        payload = json.loads(command.stdout)
+    except json.JSONDecodeError:
+        pass
+    expected_db = (host / ".ai-client" / "project" / "state" / "aicg.db").resolve()
+    nested_runtime_dir = worktree_cwd / ".ai-client"
+    actual_db = Path(str(payload.get("db") or "")).resolve() if payload.get("db") else Path()
+    passed = (
+        command.exit_code == 0
+        and actual_db == expected_db
+        and expected_db.exists()
+        and not nested_runtime_dir.exists()
+    )
+    return TestResult(
+        name="state-db-defaults-to-host-from-worktree-cwd",
+        passed=passed,
+        summary=(
+            "default state DB resolves to the host project when commands run from a task worktree"
+            if passed
+            else "default state DB created or resolved inside a task worktree"
+        ),
+        commands=[command],
+    )
+
+
+def test_doc_index_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path) -> TestResult:
+    host = run_dir / "doc-index-host-root-project"
+    worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
+    (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+    worktree_cwd.mkdir(parents=True, exist_ok=True)
+    write_text_lf(worktree_cwd / "README.md", "# Worktree fixture\n")
+    command = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "doc-index",
+            "check",
+            "--changed-path",
+            "README.md",
+            "--format",
+            "json",
+        ],
+        cwd=worktree_cwd,
+        env_root=root,
+        unset_env=["AICG_DOC_INDEX_OUTPUT"],
+    )
+    expected_index = (host / ".ai-client" / "project" / "doc-index" / "graph.json").resolve()
+    nested_runtime_dir = worktree_cwd / ".ai-client"
+    passed = command.exit_code == 0 and expected_index.exists() and not nested_runtime_dir.exists()
+    return TestResult(
+        name="doc-index-defaults-to-host-from-worktree-cwd",
+        passed=passed,
+        summary=(
+            "doc-index artifacts resolve to the host project when commands run from a task worktree"
+            if passed
+            else "doc-index artifacts were created inside a task worktree"
+        ),
+        commands=[command],
+    )
+
+
 def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
     governance_root = ai_client_governance_root()
     command = run_command(
@@ -5268,6 +5555,7 @@ def main() -> int:
             test_telemetry_trace_context_effectiveness(root, run_dir),
             test_telemetry_effectiveness_snapshot_trend(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
+            test_command_error_taxonomy_and_compact_flow(root, run_dir),
             test_file_ownership_audit(root, run_dir),
             test_install_adapter_reconcile(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
@@ -5276,6 +5564,8 @@ def main() -> int:
             test_completion_test_analysis_budget(root, run_dir),
             test_framework_debt_register(root, run_dir),
             test_framework_debt_report(root, run_dir),
+            test_state_db_defaults_to_host_from_worktree_cwd(root, run_dir),
+            test_doc_index_defaults_to_host_from_worktree_cwd(root, run_dir),
             test_runtime_manifest_report(root, run_dir),
             test_lifecycle_analysis_contract_preflight(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),

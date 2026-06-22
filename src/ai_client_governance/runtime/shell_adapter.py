@@ -70,6 +70,13 @@ def adapter_event(
     root = Path(args.root).resolve()
     cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd().resolve()
     scope = classify_scope(root=root, paths=args.scope_path or [], command=command_text, cwd=cwd)
+    shell_adapter_payload = {
+        "adapter": "ai_client_governance.py shell-adapter",
+        "mode": getattr(args, "adapter_mode", "run"),
+        "cwd": str(cwd),
+        "fail_policy": "fail_closed",
+        **getattr(args, "shell_adapter_extra", {}),
+    }
     event = tool_invocations.make_event(
         invocation_id=invocation_id,
         name=args.name or tool_invocations.infer_name(command_text, "shell-adapter"),
@@ -94,14 +101,17 @@ def adapter_event(
         scope_reason=args.scope_reason or scope.scope_reason,
         scope_paths=scope.paths,
         adapter_enforcement=args.adapter_enforcement or "shell-adapter",
-        shell_adapter={
-            "adapter": "ai_client_governance.py shell-adapter",
-            "mode": getattr(args, "adapter_mode", "run"),
-            "cwd": str(cwd),
-            "fail_policy": "fail_closed",
-            **getattr(args, "shell_adapter_extra", {}),
-        },
+        shell_adapter=shell_adapter_payload,
     )
+    if status == "failed" or exit_code not in (None, 0):
+        command_error = telemetry.classify_command_error(
+            command_text,
+            exit_code=exit_code,
+            parser_or_shell=str(shell_adapter_payload.get("shell_executable") or args.adapter_enforcement or "shell-adapter"),
+            command_file_used=bool(getattr(args, "powershell_command_file_used", False)),
+        )
+        if command_error:
+            event["command_error"] = command_error
     event["source"] = "ai_client_governance.py shell-adapter"
     return event
 
@@ -128,13 +138,19 @@ $env:AICG_SHELL_ADAPTER = "powershell-command-proxy"
 $env:AICG_EXECUTION_TELEMETRY_ENFORCEMENT = "powershell-command-proxy"
 $env:AICG_COMMAND_PROXY = "powershell"
 if (-not $env:AICG_PROXY_COMMAND_B64) {
-    Write-Error "AICG_PROXY_COMMAND_B64 is required"
-    exit 2
+    if (-not $env:AICG_PROXY_COMMAND_FILE) {
+        Write-Error "AICG_PROXY_COMMAND_B64 or AICG_PROXY_COMMAND_FILE is required"
+        exit 2
+    }
 }
 try {
-    $bytes = [Convert]::FromBase64String($env:AICG_PROXY_COMMAND_B64)
-    $command = [System.Text.Encoding]::UTF8.GetString($bytes)
-    Invoke-Expression $command
+    if ($env:AICG_PROXY_COMMAND_FILE) {
+        & $env:AICG_PROXY_COMMAND_FILE
+    } else {
+        $bytes = [Convert]::FromBase64String($env:AICG_PROXY_COMMAND_B64)
+        $command = [System.Text.Encoding]::UTF8.GetString($bytes)
+        Invoke-Expression $command
+    }
     if ($null -ne $global:LASTEXITCODE) {
         exit $global:LASTEXITCODE
     }
@@ -174,6 +190,7 @@ def run_powershell_proxy(args: argparse.Namespace) -> int:
     raw_command = list(args.command)
     if raw_command and raw_command[0] == "--":
         raw_command = raw_command[1:]
+    provided_command_file = bool(args.powershell_command_file)
     if args.powershell_command_file:
         command_path = Path(args.powershell_command_file)
         command = command_path.read_text(encoding="utf-8")
@@ -187,17 +204,38 @@ def run_powershell_proxy(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    inline_warning = telemetry.analyze_powershell_inline_command(command, command_file_used=provided_command_file)
+    if inline_warning and args.fail_on_inline_risk and not provided_command_file and args.no_auto_command_file:
+        print(
+            "shell-adapter proxy-powershell blocked risky inline command; use --powershell-command-file or allow auto command-file rewriting",
+            file=sys.stderr,
+        )
+        return 2
     with tempfile.TemporaryDirectory(prefix="aicg-shell-proxy-") as tmp:
         script_path = Path(tmp) / "Invoke-AicgCommandProxy.ps1"
         script_path.write_text(powershell_proxy_script(), encoding="utf-8", newline="\n")
+        auto_command_file_used = bool(inline_warning and not provided_command_file and not args.no_auto_command_file)
+        command_file_path = Path(args.powershell_command_file).resolve() if provided_command_file else None
+        if auto_command_file_used:
+            command_file_path = Path(tmp) / "AicgUserCommand.ps1"
+            command_file_path.write_text(command, encoding="utf-8", newline="\n")
         args.command = [*base_command, "-File", str(script_path)]
         args.powershell_command = ""
         args.adapter_enforcement = POWERSHELL_PROXY_ENFORCEMENT
         args.adapter_mode = POWERSHELL_PROXY_ENFORCEMENT
         args.command_text_override = command
+        args.powershell_command_file_used = bool(command_file_path)
+        proxy_env = dict(proxy_env)
+        if command_file_path:
+            proxy_env["AICG_PROXY_COMMAND_FILE"] = str(command_file_path)
+            proxy_env.pop("AICG_PROXY_COMMAND_B64", None)
         args.shell_adapter_extra = {
             **proxy_metadata,
+            "command_file_used": str(bool(command_file_path)).lower(),
+            "command_file_source": "provided" if provided_command_file else ("auto" if auto_command_file_used else "none"),
             "temporary_script": str(script_path),
+            **({"command_file_path": str(command_file_path)} if command_file_path else {}),
+            **({"inline_command_warning": inline_warning} if inline_warning else {}),
         }
         args.child_env_extra = proxy_env
         return run_command(args)
@@ -470,6 +508,16 @@ def build_parser() -> argparse.ArgumentParser:
     proxy.add_argument("--scope-reason", help="Explicit governance scope reason.")
     proxy.add_argument("--powershell-command", help="PowerShell command string to run through the proxy.")
     proxy.add_argument("--powershell-command-file", help="Read a UTF-8 PowerShell command string from a file.")
+    proxy.add_argument(
+        "--no-auto-command-file",
+        action="store_true",
+        help="Do not rewrite risky inline PowerShell into a temporary UTF-8 command file.",
+    )
+    proxy.add_argument(
+        "--fail-on-inline-risk",
+        action="store_true",
+        help="Exit non-zero when a risky inline command is detected and no command-file path will be used.",
+    )
     proxy.add_argument("--powershell-exe", help="PowerShell executable. Defaults to Windows PowerShell on Windows, pwsh elsewhere.")
     proxy.add_argument("--allow-non-windows", action="store_true", help="Allow pwsh-based proxy execution on non-Windows hosts when available.")
     proxy.add_argument("--format", choices=("text", "json"), default="text")

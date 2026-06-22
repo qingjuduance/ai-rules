@@ -182,14 +182,15 @@ token usage 和外部 API 调用也扩展同一 span/event schema。`telemetry r
 执行的通用记录入口；`telemetry report` 汇总 top operations、
 top subjects、span kind、subject type、重复执行、失败率、duration p50/p95/max、cache hit/miss、
 scope 分布、adapter enforcement 分布和 OpenTelemetry/W3C Trace Context 风格的 trace
-上下文摘要。当前采用报告层映射：复用已有 `trace_id`、`span_id`、`parent_span_id`
+上下文摘要，并聚合命令失败分类、未识别失败数、需要 command file 的失败数和复杂
+inline PowerShell 预警。当前采用报告层映射：复用已有 `trace_id`、`span_id`、`parent_span_id`
 和 attributes，不为了报表立刻迁移 SQLite schema。`telemetry effectiveness`
 用于比较 before/after trace 或时间窗口，量化耗时、验证耗时、命令数、失败率、cache、
 重复 subject 和 gate/completion/final-gate 数量差异；`telemetry effectiveness snapshot`
 会把当前窗口的 metrics 写入 `governance_state`，`trend` 从 DB 中读取快照并给出相邻差值，
 不再生成新的 JSON 活体文件；`task-run diagnose`
 读取同一 DB 和 worktree-coord 状态，报告重复终态命令、
-失败、cache hit/miss、活动锁、task-record/task-queue 口径差和裸 shell 覆盖缺口。
+失败分类、未识别失败、cache hit/miss、活动锁、task-record/task-queue 口径差和裸 shell 覆盖缺口。
 `task-run`、`gate-pool` 或 `tool-invocations` telemetry 只证明命令被 wrapper 补账，
 不会清空 raw shell gap；Windows PowerShell 强制覆盖必须使用
 `shell-adapter proxy-powershell --powershell-command ...`，它通过临时脚本和
@@ -1078,7 +1079,13 @@ phase、shell/parser、failure category、root cause、corrected command、retry
 dedupe key、telemetry span id 和是否需要 framework-debt。PowerShell 管道被错误解析、
 `${name}:` 插值失败、argparse 参数名错误、路径缺失、Git dirty blocker、raw shell gap
 等都要有稳定分类；同一 dedupe key 重复出现时，进入 telemetry/task-run diagnose 报告和
-framework-debt，而不是只在聊天里说"刚才命令输错了"。
+framework-debt，而不是只在聊天里说"刚才命令输错了"。`shell-adapter` 会对
+`python -c`、inline JSON、混合引号、多语句 PowerShell 和反引号等高风险 inline 命令
+给出 command-file 预警；`tool-flow --format json` 默认只输出 compact invocation，
+需要取证 full payload 时显式加 `--include-raw-json`。
+`shell-adapter proxy-powershell` 默认会把高风险 inline 命令自动重写成临时 UTF-8
+PowerShell command file 执行；需要强制阻断时可同时使用 `--no-auto-command-file`
+和 `--fail-on-inline-risk`，让命令在执行前 fail closed。
 
 `shell-adapter proxy-powershell` 只证明 PowerShell 命令经过 no-profile proxy 并写了
 telemetry；它不等于 Git 写入已经治理。`git add`、`git commit`、`git merge`、`git push`
@@ -1143,8 +1150,8 @@ python scripts\ai_client_governance.py framework-debt report `
 和 `telemetry report` 能证明本地命令压缩、telemetry 和 cache 行为，`gate-pool --dry-run`
 能看到一次聚合后的 `ai_client_governance.py doc-index`、completion/worktree 节点和
 `framework-debt report`，`completion-test` 能生成测试计划、分析契约和验证耗时归因，
-`telemetry report` 能列出最慢 validation/completion/final-gate spans，`tool-flow`
-能看到最终门禁和报告。
+`telemetry report` 能列出最慢 validation/completion/final-gate spans 和命令失败分类，
+`tool-flow` 能看到最终门禁、报告和 compact JSON 调用链。
 如果新增要求本质上需要强制执行，验收顺序是先确认代码、adapter、policy、gate 或 schema
 已经实现并可验证，再检查 README/AGENTS/manifest 是否说明如何使用。用户只批准设计时，
 文档必须标出 `design_only`、后续实现任务和独立验收口径，不能把散文规则说成运行时已强制。
@@ -1195,6 +1202,7 @@ python scripts\ai_client_governance.py gate-pool `
 ```powershell
 python scripts\ai_client_governance.py tool-flow `
   --trace-id <trace-id> `
+  --format json `
   --require-final-gate `
   --require-report `
   --require-trace

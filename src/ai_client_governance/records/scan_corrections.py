@@ -23,8 +23,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ai_client_governance.common import cli_arguments as common_cli_args
-from ai_client_governance.common.paths import STRUCTURED_DB_PATH
-
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):

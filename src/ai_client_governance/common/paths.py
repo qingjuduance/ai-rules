@@ -161,6 +161,31 @@ def first_existing(root: Path, *relative_paths: Path) -> Path:
     return root / relative_paths[0]
 
 
+def host_project_root(root: Path) -> Path:
+    """Return the host project root for embedded governance repos and task worktrees."""
+    resolved = root.resolve()
+    parts = resolved.parts
+    for index in range(len(parts) - 2):
+        if parts[index : index + 3] == (".ai-client", "project", ".worktree"):
+            host = Path(*parts[:index])
+            if (host / ".ai-client" / "project").exists():
+                return host
+        if parts[index : index + 2] == (".ai-client", COMMON_REPO_NAME):
+            host = Path(*parts[:index])
+            if (host / ".ai-client" / "project").exists():
+                return host
+    return resolved
+
+
+def structured_db_path(root: Path, override: str | None = None) -> Path:
+    """Resolve the project state DB without creating nested .ai-client dirs in worktrees."""
+    base = host_project_root(root)
+    if override:
+        path = Path(override)
+        return path if path.is_absolute() else base / path
+    return base / STRUCTURED_DB_PATH
+
+
 def ai_client_governance_root() -> Path:
     """Return the embedded ai-client-governance repository root from inside the package."""
     return Path(__file__).resolve().parents[3]

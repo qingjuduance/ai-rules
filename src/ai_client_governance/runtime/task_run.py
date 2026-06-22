@@ -1261,10 +1261,31 @@ def build_diagnostics(
             "name": event.get("name", ""),
             "command": event.get("command", ""),
             "exit_code": event.get("exit_code"),
+            "command_error": event.get("command_error")
+            if isinstance(event.get("command_error"), dict)
+            else telemetry.classify_command_error(
+                str(event.get("command") or ""),
+                exit_code=telemetry.as_int(event.get("exit_code")),
+                parser_or_shell=str(event.get("adapter_enforcement") or event.get("event_type") or "unknown"),
+            ),
         }
         for event in terminal_events
         if event.get("status") == "failed" or (event.get("exit_code") not in (None, 0))
     ]
+    command_errors = [
+        item.get("command_error")
+        for item in failures
+        if isinstance(item.get("command_error"), dict) and item.get("command_error")
+    ]
+    failure_categories = Counter(
+        str(item.get("failure_category") or "unclassified_command_failure")
+        for item in command_errors
+    )
+    command_error_summary = telemetry.summarize_command_errors(
+        command_errors,
+        failure_count=len(failures),
+        top=10,
+    )
     run_results = results or []
     return {
         "telemetry": {
@@ -1279,6 +1300,10 @@ def build_diagnostics(
             "event_count": len(events),
             "duplicate_commands": duplicates[:10],
             "failures": failures[-10:],
+            "failure_categories": dict(failure_categories),
+            "classified_failure_count": command_error_summary["classified_failure_count"],
+            "unclassified_failure_count": command_error_summary["unclassified_failure_count"],
+            "command_file_required_failure_count": command_error_summary["command_file_required_count"],
             "scope_kind_counts": dict(sorted(scope_kind_counts.items())),
             "shell_adapter_auto_intercept": {
                 "installed": adapter_installed,
@@ -1503,6 +1528,9 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Telemetry events total: {filters.get('total_event_count', telemetry_report.get('event_count', 0))}",
         f"Telemetry duplicate commands: {len(telemetry_report.get('duplicate_commands', []))}",
         f"Telemetry failures: {len(telemetry_report.get('failures', []))}",
+        f"Telemetry classified failures: {telemetry_report.get('classified_failure_count', 0)}",
+        f"Telemetry unclassified failures: {telemetry_report.get('unclassified_failure_count', 0)}",
+        f"Telemetry command-file required failures: {telemetry_report.get('command_file_required_failure_count', 0)}",
         f"Raw shell auto intercepted: {telemetry_report.get('raw_shell_auto_intercepted')}",
         f"Raw shell coverage ready: {telemetry_report.get('raw_shell_coverage_ready')}",
         f"Shell adapter auto intercept env: {auto_intercept.get('env_installed')}",
@@ -1521,6 +1549,11 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
     ]
     if requirements:
         lines.append(f"Requirement failures: {', '.join(requirements.get('failed', [])) or '<none>'}")
+    categories = telemetry_report.get("failure_categories", {})
+    if categories:
+        lines.append("Telemetry failure categories:")
+        for category, count in sorted(categories.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"  {category}: count={count}")
     return "\n".join(lines)
 
 

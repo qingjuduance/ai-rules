@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
+from ai_client_governance.common.paths import host_project_root
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -48,8 +50,15 @@ DEFAULT_TARGETS = [
 ]
 
 
-def default_output() -> str:
-    return os.environ.get("AICG_DOC_INDEX_OUTPUT", str(DEFAULT_OUTPUT))
+def resolve_index_path(root: Path, value: str | None = None) -> Path:
+    """Resolve doc-index artifacts under the host project unless explicitly overridden."""
+    raw_value = value or os.environ.get("AICG_DOC_INDEX_OUTPUT")
+    if raw_value:
+        path = Path(raw_value)
+        return path if path.is_absolute() else root / path
+    return host_project_root(root) / DEFAULT_OUTPUT
+
+
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".idea",
@@ -145,14 +154,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or check a Markdown document index.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    build = subparsers.add_parser("build", help="Build .ai-client/project/doc-index/graph.json.")
+    build = subparsers.add_parser("build", help="Build the project doc-index graph.")
     add_common_args(build)
-    build.add_argument("--output", default=default_output(), help="Index output path.")
+    build.add_argument("--output", help="Index output path.")
 
     check = subparsers.add_parser("check", help="Check links and backlinks from the document index.")
     add_common_args(check)
-    check.add_argument("--index", default=str(DEFAULT_OUTPUT), help="Index JSON path.")
-    check.add_argument("--output", default=default_output(), help="Index output path when --rebuild is used.")
+    check.add_argument("--index", help="Index JSON path.")
+    check.add_argument("--output", help="Index output path when --rebuild is used.")
     check.add_argument("--rebuild", action="store_true", help="Rebuild the index before checking.")
     check.add_argument("--changed-path", action="append", default=[], help="Changed path used for scoped affected-doc checks.")
     check.add_argument("--strict", action="store_true", help="Exit non-zero for scoped broken links or anchors.")
@@ -668,9 +677,7 @@ def main() -> int:
     root = Path(args.root).resolve()
     if args.command == "build":
         graph = build_graph(root, args.paths)
-        output = Path(args.output)
-        if not output.is_absolute():
-            output = root / output
+        output = resolve_index_path(root, args.output)
         write_graph(graph, output)
         if args.format == "json":
             print(json.dumps({"output": rel_path(output, root), "summary": graph.summary}, ensure_ascii=False, indent=2, sort_keys=True))
@@ -678,14 +685,10 @@ def main() -> int:
             print(format_build_text(graph, Path(rel_path(output, root))))
         return 0
 
-    index = Path(args.index)
-    if not index.is_absolute():
-        index = root / index
+    index = resolve_index_path(root, args.index)
     if args.rebuild or not index.exists():
         graph_obj = build_graph(root, args.paths)
-        output = Path(args.output)
-        if not output.is_absolute():
-            output = root / output
+        output = resolve_index_path(root, args.output)
         write_graph(graph_obj, output)
         graph = json.loads(json.dumps(asdict(graph_obj), ensure_ascii=False))
         index = output

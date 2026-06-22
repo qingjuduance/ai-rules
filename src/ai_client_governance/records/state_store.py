@@ -14,7 +14,7 @@ from ai_client_governance.common.time_utils import now_iso as utc_now
 from pathlib import Path
 from typing import Any
 
-from ai_client_governance.common.paths import STRUCTURED_DB_PATH
+from ai_client_governance.common.paths import structured_db_path
 
 
 STATE_SCHEMA_VERSION = 1
@@ -23,13 +23,11 @@ STATE_DB_ENV = "AICG_STATE_DB"
 
 def db_path(root: Path, override: str | None = None) -> Path:
     if override:
-        path = Path(override)
-        return path if path.is_absolute() else root / path
+        return structured_db_path(root, override)
     configured = os.environ.get(STATE_DB_ENV, "")
     if configured:
-        path = Path(configured)
-        return path if path.is_absolute() else root / path
-    return root / STRUCTURED_DB_PATH
+        return structured_db_path(root, configured)
+    return structured_db_path(root)
 
 
 def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:

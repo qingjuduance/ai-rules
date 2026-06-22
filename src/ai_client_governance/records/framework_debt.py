@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common import cli_arguments as common_cli_args
-from ai_client_governance.common.paths import STRUCTURED_DB_PATH
+from ai_client_governance.common.paths import structured_db_path
 
 
 STATUSES = ("open", "planned", "in_progress", "resolved", "deferred", "rejected")
@@ -33,10 +33,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 def db_path(root: Path, override: str | None) -> Path:
-    if override:
-        path = Path(override)
-        return path if path.is_absolute() else root / path
-    return root / STRUCTURED_DB_PATH
+    return structured_db_path(root, override)
 
 
 def connect(path: Path) -> sqlite3.Connection:

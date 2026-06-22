@@ -91,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         help="Output format. Default: markdown.",
     )
     parser.add_argument(
+        "--include-raw-json",
+        action="store_true",
+        help="Include full raw invocation payloads when --format json is used. Default JSON is compact.",
+    )
+    parser.add_argument(
         "--require-final-gate",
         action="store_true",
         help="Exit non-zero when no final-gate invocation exists.",
@@ -495,6 +500,60 @@ def build_report(args: argparse.Namespace) -> FlowReport:
     )
 
 
+def compact_invocation(item: Invocation, *, include_raw: bool = False) -> dict[str, Any]:
+    command_error = item.raw.get("command_error") if isinstance(item.raw.get("command_error"), dict) else {}
+    row = {
+        "invocation_id": item.invocation_id,
+        "name": item.name,
+        "status": item.status,
+        "timestamp": item.timestamp,
+        "command": item.command,
+        "task_tracking": item.task_tracking,
+        "task_types": item.task_types,
+        "phase": item.phase,
+        "final_gate": item.final_gate,
+        "exit_code": item.exit_code,
+        "summary": item.summary,
+        "parent_invocation_id": item.parent_invocation_id,
+        "trace_id": item.trace_id,
+        "task_node_id": item.task_node_id,
+        "parent_task_node_id": item.parent_task_node_id,
+        **(
+            {
+                "command_error": {
+                    "failure_category": command_error.get("failure_category", ""),
+                    "dedupe_key": command_error.get("dedupe_key", ""),
+                    "retry_policy": command_error.get("retry_policy", ""),
+                    "requires_command_file": bool(command_error.get("requires_command_file")),
+                }
+            }
+            if command_error
+            else {}
+        ),
+    }
+    if include_raw:
+        row["raw"] = item.raw
+    return row
+
+
+def report_to_json_dict(report: FlowReport, top: int, *, include_raw: bool = False) -> dict[str, Any]:
+    selected = report.invocations[-top:] if len(report.invocations) > top else report.invocations
+    return {
+        "root": report.root,
+        "telemetry_sources": report.telemetry_sources,
+        "invocations": [compact_invocation(item, include_raw=include_raw) for item in selected],
+        "invocation_count_total": len(report.invocations),
+        "issues": [asdict(item) for item in report.issues],
+        "summary": report.summary,
+        "flow_mode": report.flow_mode,
+        "json_policy": {
+            "default": "compact",
+            "raw_omitted": not include_raw,
+            "top": top,
+        },
+    }
+
+
 def render_issue_lines(issues: list[FlowIssue]) -> list[str]:
     lines = ["Issues:"]
     if not issues:
@@ -581,7 +640,13 @@ def main() -> int:
     args = parse_args()
     report = build_report(args)
     if args.format == "json":
-        print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                report_to_json_dict(report, args.top, include_raw=args.include_raw_json),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     elif args.format == "mermaid":
         print(render_mermaid(report.invocations, report.flow_mode, args.top))
     elif args.format == "text":
