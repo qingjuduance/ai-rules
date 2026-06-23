@@ -15,6 +15,41 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
+SIDE_EFFECT_VALUES = (
+    "readonly",
+    "state_write",
+    "repo_write",
+    "git_write",
+    "network",
+    "command",
+    "human_interrupt",
+)
+CONTROL_LAYER_VALUES = (
+    "plugin",
+    "plugin-command-wrapper",
+    "host-client",
+    "model-api",
+)
+ENFORCEMENT_LEVEL_VALUES = (
+    "schema_validated_when_called",
+    "governed_invocation_only",
+    "host_client_required",
+    "model_api_required",
+)
+REQUIRED_TOOL_FIELDS = (
+    "name",
+    "description",
+    "command",
+    "side_effect",
+    "parallel_safe",
+    "control_layer",
+    "enforcement_level",
+    "parameters_schema",
+    "output_schema",
+    "compact_output_policy",
+)
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -36,6 +71,27 @@ def object_schema(properties: dict[str, Any], required: list[str] | None = None)
         "properties": properties,
         "required": required or [],
     }
+
+
+def gateway_tool_schema() -> dict[str, Any]:
+    return object_schema(
+        {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "command": {"type": "string"},
+            "side_effect": {"type": "string", "enum": list(SIDE_EFFECT_VALUES)},
+            "parallel_safe": {"type": "boolean"},
+            "control_layer": {"type": "string", "enum": list(CONTROL_LAYER_VALUES)},
+            "enforcement_level": {"type": "string", "enum": list(ENFORCEMENT_LEVEL_VALUES)},
+            "parameters_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "compact_output_policy": {
+                "type": "string",
+                "description": "Required compact-output rule for default CLI/model-facing output.",
+            },
+        },
+        required=list(REQUIRED_TOOL_FIELDS),
+    )
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -165,6 +221,20 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 )
 
 
+def validate_specs(specs: list[ToolSpec]) -> list[str]:
+    warnings: list[str] = []
+    for spec in specs:
+        if spec.side_effect not in SIDE_EFFECT_VALUES:
+            warnings.append(f"{spec.name}: invalid side_effect={spec.side_effect}")
+        if spec.control_layer not in CONTROL_LAYER_VALUES:
+            warnings.append(f"{spec.name}: invalid control_layer={spec.control_layer}")
+        if spec.enforcement_level not in ENFORCEMENT_LEVEL_VALUES:
+            warnings.append(f"{spec.name}: invalid enforcement_level={spec.enforcement_level}")
+        if not spec.compact_output_policy.strip():
+            warnings.append(f"{spec.name}: compact_output_policy is required")
+    return warnings
+
+
 def filtered_specs(name: str = "") -> list[ToolSpec]:
     if not name:
         return list(TOOL_SPECS)
@@ -173,10 +243,22 @@ def filtered_specs(name: str = "") -> list[ToolSpec]:
 
 def build_report(name: str = "") -> dict[str, Any]:
     specs = filtered_specs(name)
+    validation_warnings = validate_specs(specs)
     return {
         "schema_version": 1,
+        "schema_kind": "ai-client-governance-tool-gateway",
         "gateway_status": "plugin_registry_only",
         "host_client_integration_required": True,
+        "tool_schema": gateway_tool_schema(),
+        "field_values": {
+            "side_effect": list(SIDE_EFFECT_VALUES),
+            "parallel_safe": "boolean; true only for readonly/stateless calls that can run concurrently",
+            "control_layer": list(CONTROL_LAYER_VALUES),
+            "enforcement_level": list(ENFORCEMENT_LEVEL_VALUES),
+            "compact_output_policy": "required non-empty string on every tool spec",
+        },
+        "validation_status": "pass" if not validation_warnings else "fail",
+        "validation_warnings": validation_warnings,
         "warning": (
             "Schemas are plugin-enforceable when this gateway is called. They do not force "
             "the host agent loop to dispatch through the gateway until the host client integrates it."
@@ -218,7 +300,7 @@ def main() -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         print(render_text(report))
-    return 0
+    return 0 if report["validation_status"] == "pass" else 1
 
 
 if __name__ == "__main__":

@@ -5287,19 +5287,55 @@ def test_capability_report_and_tool_gateway(root: Path, run_dir: Path) -> TestRe
             cwd=root,
             env_root=root,
         ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "tool-gateway",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
     ]
     capability: dict[str, object] = {}
     gateway: dict[str, object] = {}
+    runtime_gateway: dict[str, object] = {}
     try:
         capability = json.loads(commands[0].stdout)
         gateway = json.loads(commands[1].stdout)
+        runtime_gateway = json.loads(commands[2].stdout)
     except json.JSONDecodeError:
         pass
     capabilities = capability.get("capabilities", []) if isinstance(capability.get("capabilities"), list) else []
+    plugin_enforceable = (
+        capability.get("plugin_enforceable", []) if isinstance(capability.get("plugin_enforceable"), list) else []
+    )
+    plugin_auditable = (
+        capability.get("plugin_auditable", []) if isinstance(capability.get("plugin_auditable"), list) else []
+    )
+    host_client_required = (
+        capability.get("host_client_required", []) if isinstance(capability.get("host_client_required"), list) else []
+    )
+    model_api_required = (
+        capability.get("model_api_required", []) if isinstance(capability.get("model_api_required"), list) else []
+    )
+    plugin_enforceable_ids = {item.get("id") for item in plugin_enforceable if isinstance(item, dict)}
+    host_client_required_ids = {item.get("id") for item in host_client_required if isinstance(item, dict)}
+    model_api_required_ids = {item.get("id") for item in model_api_required if isinstance(item, dict)}
     raw_shell = next(
         (
             item for item in capabilities
             if isinstance(item, dict) and item.get("id") == "raw-host-shell-prevention"
+        ),
+        {},
+    )
+    exact_token = next(
+        (
+            item for item in capabilities
+            if isinstance(item, dict) and item.get("id") == "exact-token-accounting"
         ),
         {},
     )
@@ -5311,14 +5347,39 @@ def test_capability_report_and_tool_gateway(root: Path, run_dir: Path) -> TestRe
         ),
         {},
     )
+    tool_schema = gateway.get("tool_schema", {}) if isinstance(gateway.get("tool_schema"), dict) else {}
+    required_tool_fields = set(tool_schema.get("required", [])) if isinstance(tool_schema.get("required"), list) else set()
+    required_gateway_fields = {
+        "side_effect",
+        "parallel_safe",
+        "control_layer",
+        "enforcement_level",
+        "compact_output_policy",
+    }
+    tool_field_values = gateway.get("field_values", {}) if isinstance(gateway.get("field_values"), dict) else {}
+    all_tools_have_required_fields = all(
+        isinstance(item, dict) and required_gateway_fields.issubset(item) and required_tool_fields.issubset(item)
+        for item in tools
+    )
     passed = (
         all(command.exit_code == 0 for command in commands)
         and capability.get("status") == "pass"
-        and isinstance(capability.get("plugin_enforceable"), list)
-        and len(capability.get("plugin_enforceable", [])) >= 1
-        and raw_shell.get("enforcement_level") == "not-plugin-enforceable"
+        and isinstance(plugin_enforceable, list)
+        and len(plugin_enforceable) >= 1
+        and len(plugin_auditable) >= 1
+        and raw_shell.get("boundary_class") == "host-client-required"
+        and exact_token.get("boundary_class") == "model-api-required"
+        and "raw-host-shell-prevention" in host_client_required_ids
+        and "exact-token-accounting" in model_api_required_ids
+        and "raw-host-shell-prevention" not in plugin_enforceable_ids
+        and "exact-token-accounting" not in plugin_enforceable_ids
         and gateway.get("gateway_status") == "plugin_registry_only"
         and gateway.get("host_client_integration_required") is True
+        and gateway.get("validation_status") == "pass"
+        and runtime_gateway.get("tools") == gateway.get("tools")
+        and required_gateway_fields.issubset(required_tool_fields)
+        and required_gateway_fields.issubset(set(tool_field_values))
+        and all_tools_have_required_fields
         and shell_tool.get("enforcement_level") == "governed_invocation_only"
     )
     return TestResult(

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common import cli_arguments as common_cli_args
+from ai_client_governance.runtime import tool_gateway
 
 
 COMPONENT_KINDS = {
@@ -1815,6 +1816,35 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "reporter.tool-gateway-schema",
+            "reporter",
+            "report",
+            892,
+            "Report schema-first tool gateway specs and host-client dispatch boundary.",
+            events=("status-output", "resume", "final-output"),
+            mechanism_label="ai_client_governance.py runtime tool-gateway",
+            gate_step="tool-gateway",
+            fail_policy="report_only",
+            produces_facts=("tool_gateway_schema",),
+            effect="readonly",
+            condition=(
+                "Run when reporting function-calling/tool schema, compact output policy, "
+                "or host-client capability boundaries."
+            ),
+            performance_budget="constant-size in-process schema render; no repository scan or DB write",
+            metadata={
+                "command": "ai_client_governance.py runtime tool-gateway --format json",
+                "top_level_alias": "ai_client_governance.py tool-gateway --format json",
+                "gateway_status": "plugin_registry_only",
+                "host_client_integration_required": True,
+                "required_tool_fields": tool_gateway.REQUIRED_TOOL_FIELDS,
+                "capability_boundary": (
+                    "Schemas are plugin-enforceable when this gateway is called; mandatory host "
+                    "agent dispatch requires host-client integration."
+                ),
+            },
+        ),
+        component(
             "reporter.telemetry",
             "reporter",
             "report",
@@ -2166,6 +2196,13 @@ def parse_args() -> argparse.Namespace:
     capability_report.add_argument("--capability", help="Only show one capability id.")
     capability_report.add_argument("--format", choices=("text", "json"), default="text")
 
+    tool_gateway_parser = subparsers.add_parser(
+        "tool-gateway",
+        help="Output schema-first agent tool gateway specs.",
+    )
+    tool_gateway_parser.add_argument("--tool", help="Only show one tool by name.")
+    tool_gateway_parser.add_argument("--format", choices=("text", "json"), default="text")
+
     manifest_report = subparsers.add_parser("manifest-report", help="Compare runtime registry facts with manifest.json.")
     common_cli_args.add_common_global_args(manifest_report, names=("root",))
     manifest_report.add_argument("--manifest", default="manifest.json")
@@ -2287,41 +2324,75 @@ EXPECTED_RUNTIME_COMMAND_KEYS = {
 }
 
 
+CAPABILITY_BOUNDARY_CLASSES = (
+    "plugin-enforceable",
+    "plugin-auditable",
+    "host-client-required",
+    "model-api-required",
+)
+
 CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
     {
         "id": "compact-tool-output",
+        "boundary_class": "plugin-enforceable",
         "control_layer": "plugin",
         "enforcement_level": "plugin-enforceable",
         "summary": "CLI/report commands can default to compact, filtered, artifact-linked output.",
     },
     {
         "id": "task-evidence-db",
+        "boundary_class": "plugin-enforceable",
         "control_layer": "plugin",
         "enforcement_level": "plugin-enforceable",
         "summary": "Task records, corrections, framework debt, and telemetry are persisted in SQLite.",
     },
     {
-        "id": "schema-first-tool-gateway",
-        "control_layer": "plugin plus host-client",
-        "enforcement_level": "plugin-registry-now; host-routing-required-for-mandatory-dispatch",
+        "id": "tool-gateway-schema-publication",
+        "boundary_class": "plugin-enforceable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-enforceable",
         "summary": "The plugin publishes tool schemas; host clients must integrate them to make dispatch mandatory.",
     },
     {
+        "id": "governed-command-telemetry",
+        "boundary_class": "plugin-auditable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-auditable",
+        "summary": "Governed wrappers can record command spans and compact summaries for calls routed through them.",
+    },
+    {
+        "id": "token-proxy-metrics",
+        "boundary_class": "plugin-auditable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-auditable",
+        "summary": "The plugin can audit bytes, lines, command counts, and compact-output policy as token proxies.",
+    },
+    {
+        "id": "mandatory-agent-tool-routing",
+        "boundary_class": "host-client-required",
+        "control_layer": "host-client",
+        "enforcement_level": "host-client-required",
+        "summary": "Only the host client can force the model/agent loop to dispatch every tool call through the gateway.",
+    },
+    {
         "id": "raw-host-shell-prevention",
+        "boundary_class": "host-client-required",
         "control_layer": "host-client-or-sandbox",
         "enforcement_level": "not-plugin-enforceable",
         "summary": "Repository scripts can audit governed wrapper calls, but cannot prove no host-native raw shell occurred.",
     },
     {
         "id": "exact-token-accounting",
+        "boundary_class": "model-api-required",
         "control_layer": "model-api-or-host-client",
         "enforcement_level": "not-plugin-enforceable",
         "summary": "The plugin can record proxy metrics such as bytes, lines, and item counts until real token data is exposed.",
     },
     {
         "id": "prompt-caching-model-routing",
+        "boundary_class": "model-api-required",
         "control_layer": "model-api-or-host-client",
-        "enforcement_level": "not-plugin-enforceable",
+        "enforcement_level": "model-api-required",
         "summary": "Prompt cache, model choice, and API conversation state must be controlled outside the repository plugin.",
     },
 )
@@ -2335,22 +2406,20 @@ def build_capability_report(capability_id: str = "") -> dict[str, Any]:
         "host_client_required": [],
         "model_api_required": [],
     }
+    classification_warnings: list[str] = []
     for item in rows:
-        layer = str(item["control_layer"])
-        level = str(item["enforcement_level"])
-        if level == "plugin-enforceable":
-            by_level["plugin_enforceable"].append(item)
-        elif "model" in layer:
-            by_level["model_api_required"].append(item)
-        elif "host" in layer:
-            by_level["host_client_required"].append(item)
-        else:
-            by_level["plugin_auditable"].append(item)
+        boundary_class = str(item.get("boundary_class") or "")
+        if boundary_class not in CAPABILITY_BOUNDARY_CLASSES:
+            classification_warnings.append(f"{item.get('id', '<unknown>')}: invalid boundary_class={boundary_class}")
+            boundary_class = "plugin-auditable"
+        by_level[boundary_class.replace("-", "_")].append(item)
     return {
         "schema_version": 1,
-        "status": "pass" if rows else "fail",
+        "status": "pass" if rows and not classification_warnings else "fail",
         "capability_count": len(rows),
         "capabilities": rows,
+        "boundary_classes": list(CAPABILITY_BOUNDARY_CLASSES),
+        "classification_warnings": classification_warnings,
         **by_level,
         "boundary": (
             "ai-client-governance is a repository plugin. It can enforce local CLI/schema/DB behavior "
@@ -2367,7 +2436,10 @@ def render_capability_report(report: dict[str, Any]) -> str:
         f"Boundary: {report['boundary']}",
     ]
     for item in report["capabilities"]:
-        lines.append(f"- {item['id']}: {item['control_layer']} / {item['enforcement_level']} - {item['summary']}")
+        lines.append(
+            f"- {item['id']}: {item.get('boundary_class')} / {item['control_layer']} / "
+            f"{item['enforcement_level']} - {item['summary']}"
+        )
     return "\n".join(lines)
 
 
@@ -2523,6 +2595,16 @@ def main() -> int:
         else:
             print(render_capability_report(report))
         return 0 if report["status"] == "pass" else 1
+    if args.command == "tool-gateway":
+        report = tool_gateway.build_report(args.tool or "")
+        if args.tool and not report["tools"]:
+            print(f"unknown tool gateway spec: {args.tool}")
+            return 1
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(tool_gateway.render_text(report))
+        return 0 if report["validation_status"] == "pass" else 1
     if args.command == "manifest-report":
         report = build_manifest_report(args)
         if args.format == "json":

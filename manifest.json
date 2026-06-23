@@ -293,7 +293,7 @@
       "taskQueueTransition": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue transition",
       "gatePool": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool",
       "completionTest": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test",
-      "toolGateway": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-gateway",
+      "toolGateway": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime tool-gateway",
       "worktreeReconcile": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task reconcile --strict",
       "worktreeCloseoutAll": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task closeout-all --plan",
       "hostCloseout": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout --repo ai-client-governance --require-task-tracking --require-clean-host"

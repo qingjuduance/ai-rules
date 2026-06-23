@@ -2966,6 +2966,57 @@
       "task_types": []
     },
     {
+      "condition": "Run when reporting function-calling/tool schema, compact output policy, or host-client capability boundaries.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report schema-first tool gateway specs and host-client dispatch boundary.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "tool-gateway",
+      "id": "reporter.tool-gateway-schema",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py runtime tool-gateway",
+      "metadata": {
+        "capability_boundary": "Schemas are plugin-enforceable when this gateway is called; mandatory host agent dispatch requires host-client integration.",
+        "command": "ai_client_governance.py runtime tool-gateway --format json",
+        "gateway_status": "plugin_registry_only",
+        "host_client_integration_required": true,
+        "required_tool_fields": [
+          "name",
+          "description",
+          "command",
+          "side_effect",
+          "parallel_safe",
+          "control_layer",
+          "enforcement_level",
+          "parameters_schema",
+          "output_schema",
+          "compact_output_policy"
+        ],
+        "top_level_alias": "ai_client_governance.py tool-gateway --format json"
+      },
+      "order": 892,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-size in-process schema render; no repository scan or DB write",
+      "phase": "report",
+      "produces_facts": [
+        "tool_gateway_schema"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
       "condition": "Run when execution volume, duration, cache, duplicate, failure, or trace statistics are needed.",
       "dedupe_key": "",
       "dependencies": [],
