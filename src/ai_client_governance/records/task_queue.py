@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 import uuid
@@ -32,6 +33,8 @@ from ai_client_governance.runtime.host_capability_gateway import ensure_entrypoi
 QUEUE_STATE_TYPE = "task-queue"
 QUEUE_STATE_KEY = "default"
 SCHEMA_VERSION = 2
+FRAMEWORK_DEBT_ID_RE = re.compile(r"\bFD-[A-Za-z0-9][A-Za-z0-9_.-]*\b")
+FRAMEWORK_DEBT_CLOSED_STATUSES = {"resolved", "rejected"}
 
 INTAKE_STATUSES = {"candidate", "awaiting_approval"}
 READY_STATUSES = {"ready"}
@@ -628,6 +631,47 @@ def lifecycle_entry(
     }
 
 
+def referenced_framework_debt_ids(task: dict[str, Any]) -> list[str]:
+    context = task.get("context") if isinstance(task.get("context"), dict) else {}
+    values: list[str] = []
+    restore_list = context.get("restore_reading_list") if isinstance(context, dict) else []
+    if isinstance(restore_list, list):
+        values.extend(str(item) for item in restore_list)
+    ids: set[str] = set()
+    for value in values:
+        ids.update(match.group(0) for match in FRAMEWORK_DEBT_ID_RE.finditer(value))
+    return sorted(ids)
+
+
+def framework_debt_statuses(path: Path, item_ids: set[str]) -> dict[str, dict[str, Any]]:
+    if not item_ids or not path.exists():
+        return {}
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        table = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'framework_debt'"
+        ).fetchone()
+        if table is None:
+            return {}
+        placeholders = ",".join("?" for _ in item_ids)
+        rows = con.execute(
+            f"SELECT item_id, status, title FROM framework_debt WHERE item_id IN ({placeholders})",
+            sorted(item_ids),
+        ).fetchall()
+        return {
+            str(row["item_id"]): {
+                "status": str(row["status"] or ""),
+                "title": str(row["title"] or ""),
+            }
+            for row in rows
+        }
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+
+
 def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dict[str, Any]:
     queue_state = load_state_readonly(path)
     queue_tasks = {
@@ -671,6 +715,40 @@ def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dic
     for record_id, record_task in sorted(record_rows.items()):
         if record_id not in used_record:
             entries.append(lifecycle_entry(task_id=record_id, queue_task=None, record_task=record_task))
+
+    open_debt_refs = {
+        queue_id: referenced_framework_debt_ids(queue_task)
+        for queue_id, queue_task in queue_tasks.items()
+        if str(queue_task.get("status") or "") in OPEN_STATUSES
+    }
+    debt_statuses = framework_debt_statuses(path, {item for refs in open_debt_refs.values() for item in refs})
+    for entry in entries:
+        queue_info = entry.get("task_queue", {}) if isinstance(entry.get("task_queue"), dict) else {}
+        queue_id = str(queue_info.get("task_id") or "")
+        debt_reference_warnings: list[dict[str, str]] = []
+        for debt_id in open_debt_refs.get(queue_id, []):
+            debt = debt_statuses.get(debt_id, {})
+            status = str(debt.get("status") or "")
+            if status in FRAMEWORK_DEBT_CLOSED_STATUSES:
+                entry["warnings"].append("closed_framework_debt_reference")
+                debt_reference_warnings.append(
+                    {
+                        "item_id": debt_id,
+                        "status": status,
+                        "title": str(debt.get("title") or ""),
+                    }
+                )
+            elif status == "deferred":
+                entry["warnings"].append("deferred_framework_debt_reference")
+                debt_reference_warnings.append(
+                    {
+                        "item_id": debt_id,
+                        "status": status,
+                        "title": str(debt.get("title") or ""),
+                    }
+                )
+        if debt_reference_warnings:
+            entry["debt_reference_warnings"] = debt_reference_warnings
     warnings = sorted({warning for entry in entries for warning in entry["warnings"]})
     blocking_warnings = sorted(
         {
@@ -678,6 +756,7 @@ def lifecycle_summary(root: Path, path: Path, task_id: str | None = None) -> dic
             for entry in entries
             for warning in entry["warnings"]
             if warning in {"status_drift", "trace_id_drift", "id_trace_drift"}
+            or warning == "closed_framework_debt_reference"
             or (warning == "missing_in_task_record" and entry.get("task_queue", {}).get("exists"))
             or (bool(task_id) and warning == "missing_in_queue")
         }

@@ -156,7 +156,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
      checks，预算不足时拆任务或升级预算。
   9. `final-output` / `task-record gate --event final`：检查 REQ 覆盖、发现问题记录、
      worktree/Git/validation/telemetry/adapter facts 和输出边界；multi-agent 任务还必须
-     有验收 AI 对执行 AI task id 的结构化通过/不通过结论。
+     有 reviewer Agent 对 executor Agent task id 的结构化通过/不通过结论。
   10. `worktree-task finalize` / `closeout-all` / `host-closeout`：只有用户明确要求合并、
       清理或 push 时进入对应链路；否则最终回复必须报告未合并、未 push 和保留原因。
   11. `task-queue transition --to done`：只有 task record 存在、final gate 通过且 live
@@ -170,21 +170,23 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 用户要求“先写方案，让另一个 AI 实现，再由第三方验收”时，当前任务仍然必须落入
   生命周期：方案作为 design package 写入 task record，至少包含问题、目标、非目标、
   架构、数据模型、policy/gate、迁移/清理、验证计划、风险、implementation tasks、
-  reviewer acceptance criteria 和 handoff capsule。执行 AI 必须读取 design package，
-  验收 AI 必须用独立 validation facts、live state 和通过/不通过结论核对；不能只凭上一位 AI 的总结验收。
-- 验收 AI 必须按执行 AI 的 task id 或 leaf id 判断当前是否通过，记录
-  `agent-review-result.analysis` 或等价结构化事实：至少包含 reviewer agent、executor agent、
-  reviewed task id、pass/fail 结论、生命周期事实核对、提交状态核对、未处理项、处理不佳项、
-  证据、整改建议和复测计划。
+  reviewer acceptance criteria 和 handoff capsule。executor Agent 必须读取 design package，
+  reviewer Agent 必须用独立 validation facts、live state 和通过/不通过结论核对；不能只凭上一位
+  Agent 的总结验收。
+- reviewer Agent 必须按 executor Agent 的 task id 或 leaf id 判断当前是否通过，记录
+  `agent-review-result.analysis` 结构化事实：至少包含 reviewer agent/client_type、
+  executor agent/client_type、reviewed task id 或 leaf id、pass/fail 结论、生命周期事实核对、
+  提交状态核对、未处理项、处理不佳项、证据、整改建议、复测计划和复测结果。
   生命周期事实核对必须读取结构化事实和 Git live state，至少覆盖 task queue lifecycle、
   task record status、requirements/triggers/outputs/worktrees/validations/events 行数和状态、
   final gate、worktree 路径、分支、HEAD、dirty 状态、commit/merge/push 状态、验证结果、
   telemetry/raw shell gap 和 active/pending 状态。缺任一关键事实或发现记录状态与 live state
-  冲突时，结论必须为不通过或阻塞，不能只凭执行 AI 总结判断完成。
+  冲突时，结论必须为不通过或阻塞，不能只凭 executor Agent 总结判断完成。
   结论为不通过、存在未解释的未处理项或整改复测未通过时，不能进入 merge/closeout，也不能把
-  root task 标记为 done；只能退回执行 AI、登记 follow-up task 或记录阻塞。
-  在 `task-record gate`、`worktree-task closeout-all` 和 `host-closeout` 尚未实现自动检查前，
-  该要求必须标为 `design_only` 并登记后续实现任务，不能声称机器门禁已经强制生效。
+  root task 标记为 done；只能退回 executor Agent、登记 follow-up task 或记录阻塞。
+  `task-gate` 和 `task-record gate --event final` 必须自动检查该结构化事实；在
+  `worktree-task closeout-all`、`host-closeout` 和 agent 看板尚未接入前，这些收口/展示点
+  必须标为后续实现范围，不能声称已经全链路强制生效。
 - 设计包、执行任务和验收任务要用同一个 root task 或明确 parent/child 关系连接
   `tasks`、`requirements`、`framework-debt`、`corrections` 和 worktree rows。
   不再把大量临时字段塞进 agent brief 或 AGENTS 散文；agent brief 只保存最小上下文、
@@ -331,11 +333,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
 - 队列事实源是 `.ai-client/project/state/aicg.db`，入口是：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue ...`。
-- `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件或 `--queue-file` fallback；
+- `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件，也不能通过 `--queue-file`
+  读取旧队列；
   需要人读报告时使用 `status --format text/json` 输出到 stdout。
 - 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
 - 这里的 active task 是治理事务边界，不是工作量上限。一个 active task 内部可以
-  拆出多个子任务、多个 task-node、多个 worktree 和多个子 AI 分支并行执行；这些并行
+  拆出多个子任务、多个 task-node、多个 worktree 和多个委派 Agent 分支并行执行；这些并行
   单元必须共享同一个根 `task_id` 或明确的 `parent_task_id`，不能为了并行而在
   task queue 中开启第二个 active task。
 - 主任务必须记录内部并行拓扑：子任务/叶子节点、worktree slug、owner agent、写入范围、
@@ -413,7 +416,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   在现有客户端中，`runtime components` 只是 `ai-client-governance` 插件内部的治理节点注册表，
   不能假设它能拦截客户端内部所有行为。
 - 客户端运行时治理的目标模型是“能力网关”，不是事后散文检查器。宿主客户端的
-  文件写入、shell 执行、Todo 同步、审批捕获、子 AI 派发和最终回复必须逐步收束到
+  文件写入、shell 执行、Todo 同步、审批捕获、委派 Agent 派发和最终回复必须逐步收束到
   `file-write-adapter`、`shell-exec-adapter`、`todo-adapter`、
   `approval-adapter`、`agent-dispatch-adapter` 和 `final-output-adapter`。
   每个 adapter 都必须有 schema 化输入、policy 决策和结构化结果，事件语义至少覆盖
@@ -458,7 +461,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   中缺少 `shell-adapter` span 且 task record 中没有 `shell-proxy-usage` 事件时，无论
   prose 如何声明都视为 raw shell gap。
 - 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
-  要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
+  要求是否必须落盘、是否触发联网/搜索、是否触发委派 Agent 或黑盒验证。
 - 用户输入是强制 `user-message` join point。非纯只读小问答在计划、写入、恢复或最终
   回复前，必须先运行 `lifecycle input-filter`，把 `requirements`、`triggers`、
   `outputs` 和 `events.event_type=input-filter.preflight` 写入结构化 task record；
@@ -599,7 +602,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   该差值是恢复和监控信号，不代表二者职责必须完全相同。
 - 执行 telemetry 记录入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry record ...`；
-  命令只是 `span_kind=command`、`subject_type=command` 的一种载荷，模型 HTTP、子 AI、
+  命令只是 `span_kind=command`、`subject_type=command` 的一种载荷，模型 HTTP、委派 Agent、
   token usage 和外部 API 统计必须扩展同一 `execution_spans`/`execution_events` schema。
 - 执行统计和数据分析入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report ...`；
@@ -614,7 +617,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   cache hit/miss、重复 subject 和 gate/completion/final-gate 数量差异。
   `telemetry effectiveness snapshot` 必须把可复用指标写入 `governance_state`，
   `telemetry effectiveness trend` 从 DB 快照中产出趋势；不能新增默认 JSON/Markdown 活体事实源。
-  新增模型 HTTP、子 AI、token usage 或外部 API 调用统计时，必须扩展同一 telemetry
+  新增模型 HTTP、委派 Agent、token usage 或外部 API 调用统计时，必须扩展同一 telemetry
   span/event 模型，不能再新增并行日志体系。
 - `task-queue lifecycle` 是 task queue 与 structured task record 的统一生命周期视图：
   queue `completed` 与 task record `done` 都归一为 lifecycle `done`，并报告缺失、状态漂移
@@ -735,7 +738,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 - 收到用户输入后，先记录 `## 用户输入拆解门禁`：原始输入或最新指令、拆出的
   任务数/要求数，以及逐 REQ 表。逐 REQ 表必须至少包含 `REQ ID`、用户要求摘要、
-  记录判定、联网/搜索判定、子 AI/验证判定和验收/最终回复覆盖口径。
+  记录判定、联网/搜索判定、Agent/验证判定和验收/最终回复覆盖口径。
 - 对新任务，机器事实必须由 `lifecycle input-filter` 或等价 AOP/filter-chain 前置步骤写入
   SQLite：至少包含逐 REQ 行、`trigger_type=user-message` 或 `input-filter` 的触发日志、
   `event_type=input-filter.preflight` 和需要时的 `event_type=command-compression.analysis`
@@ -827,10 +830,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 多个 worktree 或子任务修改同一热点文件时，进入 integration queue，
   由单一整合者合并、记录冲突矩阵和验证结果。
 
-## 子 AI 协作
+## 多 Agent / 委派 Agent 协作
 
 - 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
-- 子 AI 协作允许多层级：总控可以派发父 agent，父 agent 可以继续拆出子 agent 或叶子
+- 委派 Agent 协作允许多层级：总控可以派发父 agent，父 agent 可以继续拆出子 agent 或叶子
   worktree，但每一层都必须继承根 `task_id`、父节点 id、写入范围、禁止路径、验证预算和
   返回契约。子 agent 的再派发不能绕过主任务审批、worktree 规则、shell-adapter 规则、
   telemetry、task-record gate 或最终整合门禁。
@@ -842,7 +845,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `events.event_type=agent-decision.analysis`：至少包含 `agent_group_decision`、
   `spawn_count`、`no_spawn_reason`、`context_pack_ref` 和
   `data_confirmation_evidence`；`spawn_count=0` 时还必须包含
-  `alternative_validation` 和 `residual_risk`。即使最终不创建子 AI，也必须记录不创建原因、
+  `alternative_validation` 和 `residual_risk`。即使最终不创建委派 Agent，也必须记录不创建原因、
   替代验证、剩余风险和下一次触发条件；缺失时 `task-record gate --event preflight`
   fail closed。`multi-agent` 任务的 final gate 必须有 `spawned`、`reused` 或
   `merged` 证据，不能用 `required`、空原因或纯计划态冒充完成。
@@ -853,25 +856,25 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   和 framework debt；找不到来源时要同时写 `no_history_source_reason` 和
   `no_action_reason`。有历史来源时 `recovered_requirements` 不能为空。
 - 写入或执行前还必须写入 `events.event_type=data-confirmation.analysis`，把用户陈述、
-  live state、历史记录、外部资料或子 AI 结论分开列为 `confirmation_sources` 和
+  live state、历史记录、外部资料或委派 Agent 结论分开列为 `confirmation_sources` 和
   `checked_facts`；未确认项必须进入 `unverified_items`，不能把“用户说过”直接当作已证实事实。
-- 子 AI 数量不使用固定小上限；由任务树叶子数、写范围冲突矩阵、上下文复用收益、
+- 委派 Agent 数量不使用固定小上限；由任务树叶子数、写范围冲突矩阵、上下文复用收益、
   验证风险和宿主客户端并发能力共同决定。能并行的独立叶子可以继续拆分；一旦写范围
   重叠、复用命中低、验证成本超过收益或用户要求收束，必须收敛到更少 agent 或主线程整合。
-- 创建新子 AI 前必须先做 `agent-context-reuse` 判定：同一 task id、同一写范围或相邻只读
+- 创建新委派 Agent 前必须先做 `agent-context-reuse` 判定：同一 task id、同一写范围或相邻只读
   问题、已有 agent 保留关键上下文、heartbeat 新鲜且无污染风险时，优先复用该 agent 的上下文
   继续 `send_input`；跨任务、跨安全边界、旧 UI 残留、事实来源不明或上下文已经污染时，不得复用，
   只能创建新 agent 或回到主线程读取结构化事实源。
 - Agent Brief 或等价短输入包必须写明 `context_reuse`：复用/新建/关闭决策、reuse key、
   已保留事实、必须跳过的重复输入、最小恢复读取清单、压缩摘要路径、token usage 来源或代理指标。
-- 子 AI 完成时必须产出可复用 context capsule：任务结论、已读文件、稳定事实、未决问题、
+- 委派 Agent 完成时必须产出可复用 context capsule：任务结论、已读文件、稳定事实、未决问题、
   artifact、验证结果、不能复用的污染点和下一次最小提示；后续 agent 只读取 capsule 和必要行号，
   不重复灌入完整历史。
 - reuse key 至少包含 `task_id`、scope、role 和上下文版本；复用 TTL 默认只在当前任务和新鲜
   heartbeat 内有效，跨任务、跨安全边界、跨 worktree 或出现 prompt injection/敏感信息/错误事实污染时
   必须失效。没有真实 token usage 时，必须记录 brief 行数、预计读取行数、必读文件数、跳过输入数等
   代理指标，不能声称精确节省 token。
-- 创建子 AI 前必须准备 Agent Brief 或等价短输入包。
+- 创建委派 Agent 前必须准备 Agent Brief 或等价短输入包。
 - Agent Brief 模板由程序输出：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates agent-brief`。
 - 文件型通信总线入口：
@@ -879,21 +882,23 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 状态看板入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py agent-groups ...`。
 - 多 agent 写入前必须登记 write scope 并获取锁。
-- 子 AI 用于测试门禁时，不能只抽查单点；必须记录 `## 子 AI 验收矩阵` 的结构化
-  表格行，覆盖本轮全部触发子 AI 的 REQ、输入门禁、输出门禁、任务类型门禁、
-  Git/worktree 门禁、失败路径、成功路径、发现问题和修复复测。
+- 委派 Agent 用于测试门禁时，不能只抽查单点；必须记录 `## 多 Agent 验收矩阵` 的结构化
+  表格行，覆盖本轮全部触发委派 Agent 的 REQ、输入门禁、输出门禁、任务类型门禁、
+  Git/worktree 门禁、失败路径、成功路径、发现问题、修复复测和执行客户端。
 - `task-gate` 必须按矩阵行校验覆盖的 REQ、门禁、失败路径、成功路径和修复复测；
   一句话式“全面覆盖、失败成功均通过”不能替代矩阵。
-- 多 AI 执行链路还必须有 `## 子 AI 任务验收结论` 或等价结构化事实，由检查 AI 对每个
-  执行 AI 的 task id/leaf id 说明当前是否通过。结论必须说明哪些 REQ 未处理、
+- 多 Agent 执行链路还必须有 `## 多 Agent 审批结论` 或 DB 中
+  `agent-review-result.analysis` 结构化事实，由 reviewer Agent 对每个 executor Agent 的
+  task id/leaf id 说明当前是否通过。结论必须说明双方 client_type、哪些 REQ 未处理、
   哪些处理质量不足、生命周期 facts 和提交状态是否闭合、依据是什么、应如何修改以及
   复测命令或复核方式。结论为不通过、
   缺少整改建议、缺少复测结果或仍有 P0/P1 问题时，禁止合并对应 worktree，
   禁止 closeout-all，禁止把 root task transition 到 done。
-- 后续实现方案必须至少覆盖：`agent-review-result.analysis` schema 校验、runtime
-  component 注册、`task-record gate --event final` 对 multi-agent task id 的结论检查、
-  `worktree-task closeout-all`/`host-closeout` 合并前阻断、agent-groups/agent-comm 看板展示、
-  以及 pass/fail、自带整改建议、复测通过/失败路径的 selftest。
+- 已实现的机器检查至少覆盖：`task-gate` 对 `## 多 Agent 验收矩阵` 和
+  `## 多 Agent 审批结论` 的表格校验、`agent-review-result.analysis` schema 校验、
+  runtime component 注册、`task-record gate --event final` 对 multi-agent task id 的结论检查，
+  以及 pass/fail、自带整改建议、复测通过/失败路径的 selftest。`worktree-task closeout-all`、
+  `host-closeout` 合并前阻断和 agent-groups/agent-comm 看板展示仍属于后续接入点。
 
 ## Corrections 与规则自迭代
 

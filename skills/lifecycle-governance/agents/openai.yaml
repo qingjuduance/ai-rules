@@ -1,0 +1,19 @@
+interface:
+  display_name: "Lifecycle Governance"
+  short_description: "Run task lifecycle gates reliably"
+  default_prompt: "Use $lifecycle-governance when work touches task records, worktrees, corrections, framework debt, gates, command errors, or lifecycle closeout. Keep plugin, host-client, and model/API capability boundaries explicit."
+metadata:
+  trigger_strategy:
+    - "governance rules or scripts"
+    - "task-record/task-queue/worktree lifecycle"
+    - "corrections or framework debt"
+    - "multi-agent coordination"
+    - "final gate or command-error failures"
+  conflict_policy: "Lifecycle safety gates win over domain-style guidance; project content rules remain more specific for their own documents."
+  freshness_policy: "Review after command renames, gate implementation changes, repeated lifecycle corrections, or stale skill references."
+  effectiveness_metrics:
+    - "missing lifecycle events"
+    - "task-record final gate failures"
+    - "unclassified command-error count"
+    - "dirty worktree blockers"
+    - "open P0/P1 corrections after final output"

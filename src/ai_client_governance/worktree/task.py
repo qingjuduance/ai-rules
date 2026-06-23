@@ -715,11 +715,16 @@ def discard_legacy_host_state_dirt(plan: dict[str, Any], project_root: Path) -> 
 
 
 def governance_script_for_project(project_root: Path) -> Path:
-    """Return the embedded governance script, falling back to the current source tree."""
+    """Return the embedded governance script or this repository's own entrypoint."""
     embedded = project_root / ".ai-client" / "ai-client-governance" / "scripts" / "ai_client_governance.py"
     if embedded.exists():
         return embedded
-    return ai_client_governance_script()
+    current = ai_client_governance_script()
+    if (project_root / "manifest.json").exists() and (project_root / "src" / "ai_client_governance").exists():
+        return current
+    raise FileNotFoundError(
+        "embedded ai-client-governance script is missing; no host-root scripts/ai_client_governance.py fallback is allowed"
+    )
 
 
 def upstream_for(cwd: Path) -> str:

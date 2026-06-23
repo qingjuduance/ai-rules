@@ -878,7 +878,7 @@
         "aop_role": "around-advice",
         "join_point": "write-intent",
         "required_event": "command-compression.analysis",
-        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists"
+        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter; host-native raw shell prevention requires host-client integration"
       },
       "order": 208,
       "path_prefixes": [],
@@ -927,7 +927,7 @@
         "coverage": "mutating-task-fast-path",
         "join_point": "write-intent",
         "required_event": "command-compression.analysis",
-        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists"
+        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter; host-native raw shell prevention requires host-client integration"
       },
       "order": 208,
       "path_prefixes": [],
@@ -1563,7 +1563,7 @@
       ]
     },
     {
-      "condition": "Run at the host-client write boundary. Entry documents and model instructions are insufficient; Trae/Doubao/Codex-style writes must be backed by an approved active task and a task worktree row.",
+      "condition": "Run at the host-client write boundary. Entry documents and model instructions are insufficient; host-client writes must be backed by an approved active task and a task worktree row.",
       "dedupe_key": "task_id:write-intent:approved-task-worktree",
       "dependencies": [],
       "description": "Fail closed before mutating writes unless task-record proves explicit approval and task worktree evidence.",
@@ -1581,7 +1581,14 @@
       "mechanism_label": "",
       "metadata": {
         "adapter_role": "prewrite-approval-worktree",
-        "blocked_gap": "client can otherwise write files or run shell commands after reading prose rules only"
+        "blocked_gap": "client can otherwise write files or run shell commands after reading prose rules only",
+        "known_client_examples": [
+          "codex",
+          "trae",
+          "doubao",
+          "claude-code",
+          "cursor"
+        ]
       },
       "order": 331,
       "path_prefixes": [],
@@ -1769,7 +1776,7 @@
       ]
     },
     {
-      "condition": "Use when updating Codex/Trae/client UI Todo items; Todo state must be regenerated from task-queue/task-record rather than treated as an independent fact source.",
+      "condition": "Use when updating host-client Todo or task UI projections; Todo state must be regenerated from task-queue/task-record rather than treated as an independent fact source.",
       "dedupe_key": "",
       "dependencies": [],
       "description": "Expose client Todo lists as a derived view from durable task-queue/task-record state.",
@@ -1792,6 +1799,10 @@
           "task-queue",
           "task-record"
         ],
+        "known_client_examples": [
+          "codex",
+          "trae"
+        ],
         "source_policy": "derived_from_task_queue_not_fact_source"
       },
       "order": 315,
@@ -1808,29 +1819,129 @@
       "task_types": []
     },
     {
-      "condition": "",
+      "condition": "Run for multi-agent task tracking; deprecated 子 AI tables are rejected instead of treated as a compatibility path.",
       "dedupe_key": "",
       "dependencies": [],
-      "description": "Require structured multi-agent acceptance matrix evidence.",
+      "description": "Require structured cross-client multi-agent acceptance matrix evidence.",
       "effect": "readonly",
       "events": [],
       "fail_policy": "fail_closed",
       "final_only": false,
-      "gate_label": "",
-      "gate_step": "",
+      "gate_label": "multi-agent-acceptance-matrix",
+      "gate_step": "task-gate",
       "id": "coordination.interceptor.agent-acceptance-matrix",
       "input_sources": [],
       "kind": "processing-interceptor",
-      "mechanism_label": "",
-      "metadata": {},
+      "mechanism_label": "task-gate validates ## 多 Agent 验收矩阵",
+      "metadata": {
+        "client_identity_field": "执行客户端",
+        "deprecated_sections_rejected": [
+          "子 AI 验收矩阵",
+          "子智能体验收矩阵",
+          "多智能体验收矩阵"
+        ],
+        "required_columns": [
+          "执行 Agent",
+          "执行客户端",
+          "覆盖 REQ",
+          "覆盖门禁",
+          "全面覆盖判定",
+          "失败路径",
+          "成功路径",
+          "发现问题/修复复测"
+        ],
+        "section": "多 Agent 验收矩阵"
+      },
       "order": 310,
       "path_prefixes": [],
       "path_suffixes": [],
       "performance_budget": "",
       "phase": "coordination",
-      "produces_facts": [],
+      "produces_facts": [
+        "multi_agent_req_gate_coverage",
+        "multi_agent_failure_success_paths"
+      ],
       "requires_changed_paths": false,
-      "requires_facts": [],
+      "requires_facts": [
+        "multi_agent_acceptance_matrix",
+        "executor_agent",
+        "executor_client_type"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run before final-output, worktree closeout, host closeout, or task-queue done for multi-agent tasks; every executor task or leaf must have an independent reviewer Agent and client_type.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require final cross-client Agent review pass/fail facts before closing multi-agent work.",
+      "effect": "readonly",
+      "events": [
+        "final-output",
+        "merge-cleanup"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "agent-review-result",
+      "gate_step": "task-record gate",
+      "id": "coordination.gate.agent-review-result",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "task-record gate --event final validates agent-review-result.analysis",
+      "metadata": {
+        "blocking_conditions": [
+          "missing_review",
+          "non_pass_decision",
+          "same_executor_and_reviewer_identity",
+          "unresolved_unhandled_items",
+          "unresolved_low_quality_items",
+          "missing_remediation",
+          "missing_or_failed_retest",
+          "stale_or_blocking_lifecycle_fact"
+        ],
+        "event_type": "agent-review-result.analysis",
+        "known_client_type_examples": [
+          "codex",
+          "trae",
+          "claude-code",
+          "cursor",
+          "cline"
+        ],
+        "required_review_fields": [
+          "executor_agent",
+          "executor_client_type",
+          "reviewer_agent",
+          "reviewer_client_type",
+          "reviewed_task_id_or_leaf_id",
+          "decision",
+          "lifecycle_fact_check",
+          "commit_status_check",
+          "unhandled_items",
+          "low_quality_items",
+          "evidence",
+          "remediation_guidance",
+          "retest_plan",
+          "retest_result"
+        ]
+      },
+      "order": 312,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "coordination",
+      "produces_facts": [
+        "agent_review_pass_fail",
+        "reviewed_executor_coverage",
+        "retest_result"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "agent-review-result.analysis",
+        "worktree_live_state",
+        "final_gate"
+      ],
       "task_sizes": [],
       "task_types": [
         "multi-agent"
@@ -2718,12 +2829,12 @@
       "condition": "",
       "dedupe_key": "",
       "dependencies": [],
-      "description": "Validate ai-client-governance architecture boundaries before closeout.",
+      "description": "Validate ai-client-governance architecture and no-legacy-fallback boundaries before closeout.",
       "effect": "readonly",
       "events": [],
       "fail_policy": "fail_closed",
       "final_only": true,
-      "gate_label": "ai_client_governance.py architecture-guard",
+      "gate_label": "ai_client_governance.py architecture-guard --check-no-legacy-fallback",
       "gate_step": "architecture-guard",
       "id": "final.gate.architecture-guard",
       "input_sources": [],
@@ -2855,6 +2966,57 @@
       "task_types": []
     },
     {
+      "condition": "Run when reporting function-calling/tool schema, compact output policy, or host-client capability boundaries.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report schema-first tool gateway specs and host-client dispatch boundary.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "tool-gateway",
+      "id": "reporter.tool-gateway-schema",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py runtime tool-gateway",
+      "metadata": {
+        "capability_boundary": "Schemas are plugin-enforceable when this gateway is called; mandatory host agent dispatch requires host-client integration.",
+        "command": "ai_client_governance.py runtime tool-gateway --format json",
+        "gateway_status": "plugin_registry_only",
+        "host_client_integration_required": true,
+        "required_tool_fields": [
+          "name",
+          "description",
+          "command",
+          "side_effect",
+          "parallel_safe",
+          "control_layer",
+          "enforcement_level",
+          "parameters_schema",
+          "output_schema",
+          "compact_output_policy"
+        ],
+        "top_level_alias": "ai_client_governance.py tool-gateway --format json"
+      },
+      "order": 892,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-size in-process schema render; no repository scan or DB write",
+      "phase": "report",
+      "produces_facts": [
+        "tool_gateway_schema"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
       "condition": "Run when execution volume, duration, cache, duplicate, failure, or trace statistics are needed.",
       "dedupe_key": "",
       "dependencies": [],
@@ -2905,7 +3067,7 @@
       "condition": "Run when final or status output depends on execution telemetry coverage.",
       "dedupe_key": "",
       "dependencies": [],
-      "description": "Report whether the host shell path is adapter-backed or still a raw-shell gap.",
+      "description": "Report governed shell invocation evidence and any host-client raw-shell integration gap.",
       "effect": "readonly",
       "events": [
         "status-output",
@@ -2928,8 +3090,8 @@
           "no-profile command proxy telemetry",
           "optional explicit profile shim marker",
           "adapter telemetry event count",
-          "fail-closed readiness",
-          "raw shell gap"
+          "governed-command fail-closed readiness",
+          "host-client raw shell integration gap"
         ]
       },
       "order": 900,
@@ -3352,9 +3514,8 @@
         "multi-agent",
         "sub-agent",
         "delegated agent",
+        "委派 Agent",
         "主从",
-        "子 AI",
-        "子AI",
         "多智能体"
       ],
       "mutating": true,

@@ -87,8 +87,8 @@ TASK_ALIASES = {
         "multi-agent",
         "agent",
         "sub-agent",
-        "子ai",
-        "子 AI",
+        "delegated agent",
+        "委派 Agent",
         "智能体",
     },
     "long-running": {
@@ -500,6 +500,49 @@ def table_with_columns(
     return None
 
 
+def section_text_any(text: str, headings: list[str]) -> tuple[str, str]:
+    for heading in headings:
+        section = section_text(text, heading)
+        if section.strip():
+            return section, heading
+    return "", ""
+
+
+def meaningful_identity(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    return not contains_any(
+        text,
+        ["待定", "未知", "unknown", "n/a", "na", "未记录", "不明", "无客户端"],
+    )
+
+
+def review_result_passed(result: str, retest: str = "") -> bool:
+    combined = f"{result} {retest}"
+    has_pass = contains_any(combined, ["通过", "pass", "passed", "approved", "复测通过", "最终通过"])
+    if not has_pass:
+        return False
+    has_fail = contains_any(combined, ["不通过", "未通过", "fail", "failed", "blocked", "阻塞"])
+    if has_fail and not contains_any(combined, ["整改后通过", "复测通过", "最终通过", "已修复并通过"]):
+        return False
+    return True
+
+
+def review_items_closed(cell: str) -> bool:
+    text = cell.strip()
+    if not text:
+        return False
+    if contains_any(text, ["无未处理", "无遗漏", "none", "no unresolved", "已处理", "已关闭", "已记录 follow-up"]):
+        return True
+    if contains_any(text, ["未处理", "未解决", "遗漏", "blocking", "阻塞"]) and not contains_any(
+        text,
+        ["无未处理", "已处理", "已关闭", "已记录", "follow-up"],
+    ):
+        return False
+    return contains_any(text, ["无", "none", "已记录", "follow-up", "后续任务", "整改完成"])
+
+
 def requirement_gate_ids(text: str) -> set[str]:
     section = section_text(text, "用户要求追踪门禁")
     table = user_requirement_table(section)
@@ -787,7 +830,7 @@ def validate_applicability_gate(text: str, errors: list[Finding], tracking: str)
 
 
 def validate_runtime_effectiveness_gate(text: str, errors: list[Finding], tracking: str) -> None:
-    if not contains_any(text, ["runtime", "生命周期", "节点", "gate-pool", "ComponentDefinition"]):
+    if not contains_any(text, ["runtime", "runtime component", "运行时组件", "gate-pool", "ComponentDefinition"]):
         return
     required_groups = [
         ("runtime component visibility", ["runtime components", "组件", "节点可见"]),
@@ -888,7 +931,7 @@ def validate_input_decomposition_gate(text: str, errors: list[Finding], tracking
             ("network", ["联网/搜索判定", "联网判定", "搜索判定", "网络判定"]),
             (
                 "validation",
-                ["子 AI/验证判定", "子智能体/验证判定", "子 AI 判定", "子智能体判定", "验证判定", "黑盒判定"],
+                ["Agent/验证判定", "多 Agent 判定", "Agent 判定", "验证判定", "黑盒判定"],
             ),
             ("acceptance", ["验收", "完成口径", "最终回复", "覆盖口径"]),
         ],
@@ -926,7 +969,7 @@ def validate_input_decomposition_gate(text: str, errors: list[Finding], tracking
             add(errors, "error", f"{row_label} input decomposition row lacks explicit recording judgement.", tracking)
         if not contains_any(network, ["触发", "不触发", "需要", "无需", "联网", "搜索", "URL", "资料", "引用", "证据"]):
             add(errors, "error", f"{row_label} input decomposition row lacks explicit network/search judgement.", tracking)
-        if not contains_any(validation, ["触发", "不触发", "需要", "无需", "验证", "测试", "selftest", "task-gate", "子 AI", "黑盒"]):
+        if not contains_any(validation, ["触发", "不触发", "需要", "无需", "验证", "测试", "selftest", "task-gate", "Agent", "黑盒"]):
             add(errors, "error", f"{row_label} input decomposition row lacks explicit subagent/validation judgement.", tracking)
         if not contains_any(acceptance, ["验收", "最终回复", "覆盖", "完成口径", "说明"]):
             add(errors, "error", f"{row_label} input decomposition row lacks final acceptance coverage.", tracking)
@@ -959,20 +1002,36 @@ def validate_input_decomposition_gate(text: str, errors: list[Finding], tracking
             )
 
 
-def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tracking: str) -> None:
-    section = (
-        section_text(text, "子 AI 验收矩阵")
-        or section_text(text, "子智能体验收矩阵")
-        or section_text(text, "多智能体验收矩阵")
+def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tracking: str) -> set[str]:
+    deprecated_sections = [
+        "子 AI 验收矩阵",
+        "子智能体验收矩阵",
+        "多智能体验收矩阵",
+    ]
+    for deprecated in deprecated_sections:
+        if section_text(text, deprecated).strip():
+            add(
+                errors,
+                "error",
+                f"deprecated multi-agent section ## {deprecated} is not accepted; use ## 多 Agent 验收矩阵.",
+                tracking,
+            )
+
+    section, _ = section_text_any(
+        text,
+        [
+            "多 Agent 验收矩阵",
+        ],
     )
     if not section.strip():
-        add(errors, "error", "multi-agent task must record ## 子 AI 验收矩阵.", tracking)
-        return
+        add(errors, "error", "multi-agent task must record ## 多 Agent 验收矩阵.", tracking)
+        return set()
 
     table = table_with_columns(
         section,
         [
-            ("agent", ["子 AI", "子智能体", "agent"]),
+            ("agent", ["执行 Agent", "executor agent"]),
+            ("client", ["执行客户端", "执行 client_type", "executor client"]),
             ("req", ["覆盖 REQ", "REQ", "要求"]),
             ("gates", ["覆盖门禁", "门禁", "gates"]),
             ("coverage", ["全面覆盖", "覆盖判定", "覆盖率"]),
@@ -985,19 +1044,21 @@ def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tra
         add(
             errors,
             "error",
-            "multi-agent acceptance matrix must use a structured table with agent, REQ, gate, coverage, failure, success, and remediation columns.",
+            "multi-agent acceptance matrix must use a structured table with agent, client_type, REQ, gate, coverage, failure, success, and remediation columns.",
             tracking,
         )
-        return
+        return set()
 
     _, rows, indexes = table
     if not rows:
         add(errors, "error", "multi-agent acceptance matrix has no agent rows.", tracking)
-        return
+        return set()
 
     covered_req_ids: set[str] = set()
+    covered_agents: set[str] = set()
     for row in rows:
         agent = row[indexes["agent"]].strip()
+        client = row[indexes["client"]].strip()
         row_req_ids = req_ids(row[indexes["req"]])
         gates = row[indexes["gates"]].strip()
         coverage = row[indexes["coverage"]].strip()
@@ -1005,8 +1066,12 @@ def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tra
         success = row[indexes["success"]].strip()
         finding = row[indexes["finding"]].strip()
         row_label = agent or "multi-agent acceptance row"
-        if not agent:
+        if not meaningful_identity(agent):
             add(errors, "error", "multi-agent acceptance matrix row lacks agent name.", tracking)
+        else:
+            covered_agents.add(agent)
+        if not meaningful_identity(client):
+            add(errors, "error", f"{row_label} multi-agent acceptance row lacks executor client_type.", tracking)
         if not row_req_ids:
             add(errors, "error", f"{row_label} acceptance row lacks covered REQ ids.", tracking)
         covered_req_ids.update(row_req_ids)
@@ -1025,7 +1090,15 @@ def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tra
         section_text(text, "用户输入拆解门禁"),
         [
             ("req", ["REQ ID", "要求 ID", "要求ID", "ID"]),
-            ("validation", ["子 AI/验证判定", "子智能体/验证判定", "子 AI 判定", "子智能体判定", "验证判定", "黑盒判定"]),
+            (
+                "validation",
+                [
+                    "Agent/验证判定",
+                    "多 Agent 判定",
+                    "验证判定",
+                    "黑盒判定",
+                ],
+            ),
         ],
     )
     if input_table:
@@ -1035,11 +1108,12 @@ def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tra
             validation = input_row[input_indexes["validation"]]
             explicit_non_agent = contains_any(
                 validation,
-                ["不触发子 AI", "不触发子智能体", "无需子 AI", "无需子智能体", "无子 AI"],
+                ["不触发 Agent", "无需 Agent", "无 Agent"],
             )
-            explicit_agent = contains_any(validation, ["multi-agent", "子 AI 验收矩阵", "子智能体验收矩阵"]) or (
-                contains_any(validation, ["子 AI", "子智能体"]) and not explicit_non_agent
-            )
+            explicit_agent = contains_any(
+                validation,
+                ["multi-agent", "多 Agent", "多 Agent 验收矩阵"],
+            ) or (contains_any(validation, ["Agent"]) and not explicit_non_agent)
             if explicit_agent:
                 required_matrix_ids.update(req_ids(input_row[input_indexes["req"]]))
         missing = sorted(required_matrix_ids - covered_req_ids)
@@ -1050,6 +1124,123 @@ def validate_multi_agent_acceptance_matrix(text: str, errors: list[Finding], tra
                 f"multi-agent acceptance matrix missing triggered REQ coverage: {', '.join(missing)}.",
                 tracking,
             )
+    return covered_agents
+
+
+def validate_multi_agent_review_result(
+    text: str,
+    errors: list[Finding],
+    tracking: str,
+    expected_executors: set[str],
+) -> None:
+    section, _ = section_text_any(
+        text,
+        [
+            "多 Agent 审批结论",
+        ],
+    )
+    if not section.strip():
+        add(errors, "error", "multi-agent task must record ## 多 Agent 审批结论.", tracking)
+        return
+
+    table = table_with_columns(
+        section,
+        [
+            ("executor_agent", ["执行 Agent", "executor agent"]),
+            ("executor_client", ["执行客户端", "executor client", "执行 client_type"]),
+            ("reviewed_task", ["执行任务", "reviewed task", "task id", "leaf id", "任务 ID"]),
+            ("reviewer_agent", ["复核 Agent", "reviewer agent"]),
+            ("reviewer_client", ["复核客户端", "reviewer client", "复核 client_type"]),
+            ("result", ["复核结果", "审批结论", "pass/fail", "结论", "result"]),
+            ("lifecycle", ["生命周期事实", "lifecycle"]),
+            ("commit", ["提交状态", "commit", "merge", "push"]),
+            ("unhandled", ["未处理项", "unhandled"]),
+            ("quality", ["处理质量不足", "质量不足", "low-quality", "low quality"]),
+            ("evidence", ["证据", "evidence", "依据"]),
+            ("remediation", ["整改建议", "remediation", "修复建议"]),
+            ("retest", ["复测", "retest"]),
+        ],
+    )
+    if not table:
+        add(
+            errors,
+            "error",
+            (
+                "multi-agent review result must use a structured table with executor/reviewer agents, "
+                "client_type, reviewed task, pass/fail result, lifecycle, commit, unhandled, quality, "
+                "evidence, remediation, and retest columns."
+            ),
+            tracking,
+        )
+        return
+
+    _, rows, indexes = table
+    if not rows:
+        add(errors, "error", "multi-agent review result has no review rows.", tracking)
+        return
+
+    reviewed_executors: set[str] = set()
+    for row in rows:
+        executor = row[indexes["executor_agent"]].strip()
+        executor_client = row[indexes["executor_client"]].strip()
+        reviewed_task = row[indexes["reviewed_task"]].strip()
+        reviewer = row[indexes["reviewer_agent"]].strip()
+        reviewer_client = row[indexes["reviewer_client"]].strip()
+        result = row[indexes["result"]].strip()
+        lifecycle = row[indexes["lifecycle"]].strip()
+        commit = row[indexes["commit"]].strip()
+        unhandled = row[indexes["unhandled"]].strip()
+        quality = row[indexes["quality"]].strip()
+        evidence = row[indexes["evidence"]].strip()
+        remediation = row[indexes["remediation"]].strip()
+        retest = row[indexes["retest"]].strip()
+        row_label = reviewed_task or executor or "multi-agent review row"
+
+        if not meaningful_identity(executor):
+            add(errors, "error", "multi-agent review row lacks executor agent.", tracking)
+        else:
+            reviewed_executors.add(executor)
+        if not meaningful_identity(executor_client):
+            add(errors, "error", f"{row_label} review row lacks executor client_type.", tracking)
+        if not meaningful_identity(reviewer):
+            add(errors, "error", f"{row_label} review row lacks reviewer agent.", tracking)
+        if not meaningful_identity(reviewer_client):
+            add(errors, "error", f"{row_label} review row lacks reviewer client_type.", tracking)
+        if executor and reviewer and executor.lower() == reviewer.lower() and executor_client.lower() == reviewer_client.lower():
+            add(errors, "error", f"{row_label} reviewer must be independent from executor.", tracking)
+        if not meaningful_identity(reviewed_task):
+            add(errors, "error", f"{row_label} review row lacks reviewed task id or leaf id.", tracking)
+        if not review_result_passed(result, retest):
+            add(errors, "error", f"{row_label} review result must be a final pass with retest evidence.", tracking)
+        for label, cell, patterns in [
+            ("task queue lifecycle fact", lifecycle, ["task queue", "task-queue", "任务队列"]),
+            ("task record fact", lifecycle, ["task record", "task-record", "任务记录"]),
+            ("worktree live state", lifecycle, ["worktree", "live state", "dirty", "clean", "工作区"]),
+            ("validation/final gate fact", lifecycle, ["validation", "验证", "final gate", "最终门禁"]),
+            ("telemetry/raw shell fact", lifecycle, ["telemetry", "raw shell", "shell", "遥测"]),
+            ("commit/merge/push status", commit, ["commit", "提交", "merge", "合并", "push", "推送"]),
+        ]:
+            if not contains_any(cell, patterns):
+                add(errors, "error", f"{row_label} review row lacks {label}.", tracking)
+        if not review_items_closed(unhandled):
+            add(errors, "error", f"{row_label} review row has unresolved unhandled items.", tracking)
+        if not review_items_closed(quality):
+            add(errors, "error", f"{row_label} review row has unresolved low-quality items.", tracking)
+        if not meaningful_identity(evidence):
+            add(errors, "error", f"{row_label} review row lacks evidence.", tracking)
+        if not contains_any(remediation, ["整改", "修复", "退回", "无需整改", "无整改", "remediation"]):
+            add(errors, "error", f"{row_label} review row lacks remediation guidance.", tracking)
+        if not contains_any(retest, ["复测", "retest"]) or not review_result_passed(retest):
+            add(errors, "error", f"{row_label} review row lacks passing retest result.", tracking)
+
+    missing = sorted(expected_executors - reviewed_executors)
+    if missing:
+        add(
+            errors,
+            "error",
+            f"multi-agent review result missing executor coverage: {', '.join(missing)}.",
+            tracking,
+        )
 
 
 def validate_user_requirement_gate(text: str, errors: list[Finding], tracking: str) -> None:
@@ -1403,7 +1594,8 @@ def validate_task_type(
     elif task_type == "multi-agent":
         if not contains_any(text, ["agent", "智能体", "current-status", "brief"]):
             add(errors, "error", "multi-agent task requires agent status/brief evidence.", tracking)
-        validate_multi_agent_acceptance_matrix(text, errors, tracking)
+        covered_agents = validate_multi_agent_acceptance_matrix(text, errors, tracking)
+        validate_multi_agent_review_result(text, errors, tracking, covered_agents)
     elif task_type == "long-running":
         if not contains_any(text, ["pending", "恢复现场", "下一步"]):
             add(errors, "error", "long-running task requires pending/recovery evidence.", tracking)

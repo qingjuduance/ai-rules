@@ -666,9 +666,10 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "--root",
                     str(architecture_root),
                     "--strict",
+                    "--check-no-legacy-fallback",
                 ),
                 final_gate=True,
-                reason="Final host-project .ai-client architecture boundary gate.",
+                reason="Final host-project .ai-client architecture and no-legacy-fallback boundary gate.",
             )
         )
     if "task-record" in gate_steps and not args.task_tracking:
@@ -725,8 +726,20 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
         if args.task_tracking:
             steps[-1].command.append("--require-task-tracking")
     if args.final and "task-queue" in gate_steps:
+        queue_root = host_project_root(root)
+        lifecycle_args = ["--root", str(queue_root), "lifecycle", "--fail-on-drift"]
+        if args.task_id:
+            lifecycle_args.extend(["--task-id", args.task_id])
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py task-queue lifecycle",
+                phase="final-gate",
+                command=cli_command(py, entrypoint, "task-queue", *lifecycle_args),
+                final_gate=True,
+                reason="Final task queue lifecycle drift gate.",
+            )
+        )
         if args.task_tracking:
-            queue_root = host_project_root(root)
             steps.append(
                 GateStep(
                     name="ai_client_governance.py task-queue",

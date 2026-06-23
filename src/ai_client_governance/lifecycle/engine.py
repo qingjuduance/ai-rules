@@ -788,6 +788,16 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "event_type": structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT,
                 "payload": {
                     "join_point": "host-capability-boundary",
+                    "capability_fact_kind": "registration",
+                    "control_layer": "plugin",
+                    "enforcement_level": "audit_only",
+                    "hard_enforcement_available": False,
+                    "registration_event": True,
+                    "invocation_telemetry_required": True,
+                    "residual_risk": (
+                        "This event records the plugin entrypoint capability boundary. It does not prove "
+                        "host-native shell or tool calls outside governed wrappers were intercepted."
+                    ),
                     "lifecycle_input_filter_enforced": True,
                     "prewrite_runtime_adapter": "task-record gate --event preflight",
                     "runtime_adapter_components": [
@@ -797,13 +807,17 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                         "preflight.interceptor.raw-shell-coverage",
                     ],
                     "shell_enforcement_mode": "non-invasive-command-proxy",
+                    "shell_control_layer": "plugin-command-wrapper",
+                    "shell_enforcement_scope": "governed_commands_only",
                     "shell_command_proxy": "shell-adapter proxy-powershell",
+                    "raw_host_shell_interception": False,
                     "profile_policy": "no_profile",
                     "profile_touched": False,
                     "user_shell_impact": "none",
                     "raw_shell_gap_policy": (
                         "Fail closed for governed commands unless no-profile command proxy, local env "
-                        "activation, or an explicit gated exception is recorded."
+                        "activation, or an explicit gated exception is recorded; host-native raw shell "
+                        "prevention requires host-client integration."
                     ),
                     "client_runtime_scope": report.classification.scope_kind,
                     "fail_policy": "fail_closed",

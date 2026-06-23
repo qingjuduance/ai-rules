@@ -30,6 +30,58 @@ FORBIDDEN_CODEX_TOP = {
     "agent-groups",
     "tool-invocations",
 }
+LEGACY_FALLBACK_PATTERNS = (
+    ".codex/rules/common",
+    ".codex/project",
+    ".codex/ai-client-governance",
+    ".codex/skills",
+    "--queue-file",
+    "fallbackmode",
+    "fallbackmethod",
+    "legacy markdown fallback",
+    "legacy json fallback",
+    "json fallback",
+    "markdown fallback",
+    "fallback reader",
+    "fallback writer",
+    "compatibility reader",
+    "compatibility writer",
+    "backward-compatible fallback",
+    "default fallback",
+    "fallback path",
+)
+LEGACY_FALLBACK_ALLOWLIST = (
+    "history",
+    "historical",
+    "audit",
+    "export",
+    "forbidden",
+    "not a fallback",
+    "not supported",
+    "not-generated-by-default",
+    "not as fallback",
+    "no fallback",
+    "no .codex fallback",
+    "must not",
+    "do not",
+    "older",
+    "old layout",
+    "old .codex governance layout must be removed",
+    "不是",
+    "不作为",
+    "不能",
+    "不得",
+    "不要",
+    "不再",
+    "不再作为",
+    "不再用",
+    "不支持",
+    "不兼容",
+    "已删除",
+    "旧布局",
+    "残留",
+    "迁移或删除",
+)
 NATIVE_PROJECT_SKILLS_DIR = Path("skills")
 AI_CLIENT_GOVERNANCE_SKILLS_DIR = AI_CLIENT_ROOT / "ai-client-governance" / "skills"
 
@@ -84,6 +136,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero on warnings.")
     parser.add_argument("--allow-config-file", action="store_true", default=True)
+    parser.add_argument(
+        "--check-no-legacy-fallback",
+        action="store_true",
+        help="Fail on unsupported legacy governance fallback references outside explicit history/export wording.",
+    )
     return parser.parse_args()
 
 
@@ -98,8 +155,12 @@ def build_report(root: Path) -> dict[str, object]:
     errors: list[Finding] = []
     warnings: list[Finding] = []
     notes: list[str] = []
+    governance_repo_root = (root / "manifest.json").exists() and (root / "src" / "ai_client_governance").exists()
     ai_client = root / AI_CLIENT_ROOT
-    if not ai_client.exists():
+    if governance_repo_root:
+        ai_client_top_entries = []
+        notes.append("root kind: ai-client-governance repository")
+    elif not ai_client.exists():
         errors.append(Finding("error", ".ai-client directory is missing", AI_CLIENT_ROOT.as_posix()))
         ai_client_top_entries: list[str] = []
     else:
@@ -126,13 +187,13 @@ def build_report(root: Path) -> dict[str, object]:
             )
             (errors if level == "error" else warnings).append(finding)
 
-    if (root / "scripts").exists():
+    if (root / "scripts").exists() and not governance_repo_root:
         errors.append(Finding("error", "root scripts directory must not exist", "scripts"))
     if (root / ".codex" / "cache").exists():
         errors.append(Finding("error", "top-level .codex/cache must not exist; use .ai-client/project/cache", ".codex/cache"))
 
     for path in REQUIRED_PROJECT_PATHS:
-        if not (root / path).exists():
+        if not governance_repo_root and not (root / path).exists():
             errors.append(Finding("error", f"required project path is missing: {path.as_posix()}", path.as_posix()))
     generated_present = [path.as_posix() for path in GENERATED_PROJECT_PATHS if (root / path).exists()]
     generated_absent = [path.as_posix() for path in GENERATED_PROJECT_PATHS if not (root / path).exists()]
@@ -242,7 +303,9 @@ def build_report(root: Path) -> dict[str, object]:
                     )
                 )
 
-    file_report = file_ownership.build_report(root)
+    file_report = {"tracked_total": 0, "ignored_untracked_count": 0, "gitignore": {"status": "not-applicable"}}
+    if not governance_repo_root:
+        file_report = file_ownership.build_report(root)
     for item in file_report.get("errors", []):
         if isinstance(item, dict):
             errors.append(
@@ -298,6 +361,70 @@ def build_report(root: Path) -> dict[str, object]:
     }
 
 
+def check_no_legacy_fallback(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    scan_roots = [
+        root / "AGENTS.md",
+        root / "README.md",
+        root / "manifest.json",
+        root / "src",
+        root / "skills",
+    ]
+    embedded = root / AI_CLIENT_ROOT / "ai-client-governance"
+    if embedded.exists():
+        scan_roots.extend(
+            [
+                embedded / "AGENTS.md",
+                embedded / "README.md",
+                embedded / "manifest.json",
+                embedded / "src",
+                embedded / "skills",
+            ]
+        )
+    files: list[Path] = []
+    for item in scan_roots:
+        if item.is_file():
+            files.append(item)
+        elif item.is_dir():
+            files.extend(
+                path
+                for path in item.rglob("*")
+                if path.is_file() and path.suffix.lower() in {".py", ".md", ".json", ".yaml", ".yml"}
+            )
+    for path in sorted(set(files)):
+        current_rel = rel(path, root)
+        if current_rel.endswith("src/ai_client_governance/validation/selftest.py"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        in_pattern_definition = False
+        lines = text.splitlines()
+        for line_no, line in enumerate(lines, start=1):
+            if current_rel.endswith("src/ai_client_governance/gates/architecture_guard.py"):
+                if "LEGACY_FALLBACK_PATTERNS" in line:
+                    in_pattern_definition = True
+                if in_pattern_definition:
+                    if line.strip() == ")":
+                        in_pattern_definition = False
+                    continue
+            lowered = line.lower()
+            if not any(pattern in lowered for pattern in LEGACY_FALLBACK_PATTERNS):
+                continue
+            context = "\n".join(lines[max(0, line_no - 3) : min(len(lines), line_no + 2)]).lower()
+            if any(marker in context for marker in LEGACY_FALLBACK_ALLOWLIST):
+                continue
+            findings.append(
+                Finding(
+                    "error",
+                    "unsupported legacy/fallback reference needs cleanup or explicit history/export allowlist",
+                    f"{rel(path, root)}:{line_no}",
+                )
+            )
+    return findings
+
+
 def render_text(report: dict[str, object]) -> str:
     errors = report["errors"]
     warnings = report["warnings"]
@@ -325,6 +452,13 @@ def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
     report = build_report(root)
+    if args.check_no_legacy_fallback:
+        legacy_findings = check_no_legacy_fallback(root)
+        report["no_legacy_fallback"] = {
+            "status": "pass" if not legacy_findings else "fail",
+            "findings": [asdict(item) for item in legacy_findings],
+        }
+        report["errors"].extend(asdict(item) for item in legacy_findings)
     if args.format == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

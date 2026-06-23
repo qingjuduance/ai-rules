@@ -390,7 +390,8 @@ def diagnose(args: argparse.Namespace) -> int:
     command_proxy_events = [event for event in adapter_events if is_command_proxy_event(event)]
     command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
     command_proxy_ready = command_proxy_env or bool(command_proxy_events)
-    raw_shell_coverage_ready = local_activation_ready or command_proxy_ready
+    governed_shell_evidence_ready = local_activation_ready or command_proxy_ready
+    raw_shell_coverage_ready = governed_shell_evidence_ready
     scope_counts = Counter(str(event.get("scope_kind") or "unknown") for event in adapter_events)
     payload = {
         "adapter": "ai_client_governance.py shell-adapter",
@@ -411,7 +412,13 @@ def diagnose(args: argparse.Namespace) -> int:
             "profile_required": False,
             "profile_touched": False,
             "user_shell_impact": "none",
-            "policy": "default raw shell coverage accepts only local env activation or no-profile command proxy",
+            "policy": (
+                "default governed-command shell evidence accepts only local env activation "
+                "or no-profile command proxy; host-native raw shell prevention is not plugin-enforceable"
+            ),
+            "coverage_scope": "governed_commands_only",
+            "hard_host_interception": False,
+            "residual_risk": "raw host shell calls outside governed wrappers can only be audited by host-client integration",
         },
         "command_proxy": {
             "supported_platforms": ["windows-powershell"],
@@ -433,13 +440,14 @@ def diagnose(args: argparse.Namespace) -> int:
             "event_count": len(adapter_events),
             "latest_event": adapter_events[-1] if adapter_events else {},
         },
+        "governed_shell_evidence_ready": governed_shell_evidence_ready,
         "raw_shell_coverage_ready": raw_shell_coverage_ready,
-        "fail_closed_ready": raw_shell_coverage_ready,
+        "fail_closed_ready": governed_shell_evidence_ready,
     }
     requirement_failures: list[str] = []
     if args.require_auto_intercept and not auto_intercept_ready:
         requirement_failures.append("shell-adapter-auto-intercept")
-    if (args.require_adapter or args.require_fail_closed or args.require_raw_shell_coverage) and not raw_shell_coverage_ready:
+    if (args.require_adapter or args.require_fail_closed or args.require_raw_shell_coverage) and not governed_shell_evidence_ready:
         requirement_failures.append("shell-adapter-raw-shell-coverage")
     if args.require_command_proxy and not command_proxy_ready:
         requirement_failures.append("shell-adapter-command-proxy")
@@ -457,7 +465,8 @@ def diagnose(args: argparse.Namespace) -> int:
         print(f"Adapter events: {payload['event_count']}")
         print(f"Command proxy events: {payload['command_proxy']['event_count']}")
         print(f"Non-invasive local activation ready: {payload['non_invasive']['local_activation_ready']}")
-        print(f"Raw shell coverage ready: {payload['raw_shell_coverage_ready']}")
+        print(f"Governed shell evidence ready: {payload['governed_shell_evidence_ready']}")
+        print(f"Raw shell coverage ready (compat): {payload['raw_shell_coverage_ready']}")
         print(f"Fail-closed ready: {payload['fail_closed_ready']}")
         print(f"Scope kinds: {json.dumps(payload['scope_kind_counts'], ensure_ascii=False, sort_keys=True)}")
         print(f"Requirement failures: {', '.join(requirement_failures) or '<none>'}")
@@ -537,8 +546,8 @@ def build_parser() -> argparse.ArgumentParser:
     diag = sub.add_parser("diagnose", help="Report shell adapter installation and telemetry evidence.")
     diag.add_argument("--task-id", help="Only include adapter events for one structured task id.")
     diag.add_argument("--profile-path", help="PowerShell profile file to inspect for the adapter marker.")
-    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless raw shell coverage exists through auto-intercept or command proxy evidence.")
-    diag.add_argument("--require-fail-closed", action="store_true", help="Exit non-zero unless raw shell coverage exists through auto-intercept or command proxy evidence.")
+    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless governed-command shell evidence exists through local activation or command proxy telemetry.")
+    diag.add_argument("--require-fail-closed", action="store_true", help="Exit non-zero unless governed-command shell evidence exists through local activation or command proxy telemetry.")
     diag.add_argument("--require-auto-intercept", action="store_true", help="Exit non-zero unless adapter env/profile auto-intercept is installed.")
     diag.add_argument("--require-command-proxy", action="store_true", help="Exit non-zero unless command proxy evidence exists.")
     diag.add_argument("--require-raw-shell-coverage", action="store_true", help="Exit non-zero unless auto-intercept or command proxy evidence exists.")

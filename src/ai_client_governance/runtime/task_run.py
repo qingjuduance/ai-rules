@@ -1251,7 +1251,8 @@ def build_diagnostics(
     local_activation_ready = env_intercept_installed
     command_proxy_env = bool(os.environ.get(POWERSHELL_PROXY_ENV))
     command_proxy_ready = command_proxy_env or bool(command_proxy_events)
-    raw_shell_coverage_ready = local_activation_ready or command_proxy_ready
+    governed_shell_evidence_ready = local_activation_ready or command_proxy_ready
+    raw_shell_coverage_ready = governed_shell_evidence_ready
     scope_kind_counts = Counter(str(event.get("scope_kind") or "unknown") for event in terminal_events)
     shell_adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in shell_adapter_events)
     task_run_tool_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in task_run_tool_events)
@@ -1318,7 +1319,13 @@ def build_diagnostics(
                 "profile_required": False,
                 "profile_touched": False,
                 "user_shell_impact": "none",
-                "policy": "default raw shell coverage accepts only local env activation or no-profile command proxy",
+                "policy": (
+                    "default governed-command shell evidence accepts only local env activation "
+                    "or no-profile command proxy; host-native raw shell prevention is not plugin-enforceable"
+                ),
+                "coverage_scope": "governed_commands_only",
+                "hard_host_interception": False,
+                "residual_risk": "raw host shell calls outside governed wrappers can only be audited by host-client integration",
             },
             "shell_adapter_telemetry": {
                 "event_count": len(shell_adapter_events),
@@ -1350,9 +1357,12 @@ def build_diagnostics(
                 "installed": adapter_installed,
                 "event_count": len(shell_adapter_events),
                 "enforcement_modes": dict(sorted(shell_adapter_modes.items())),
-                "fail_closed_ready": raw_shell_coverage_ready,
+                "fail_closed_ready": governed_shell_evidence_ready,
                 "latest_event": shell_adapter_events[-1] if shell_adapter_events else {},
             },
+            "governed_shell_evidence_ready": governed_shell_evidence_ready,
+            "governed_shell_evidence_scope": "governed_commands_only",
+            "hard_host_shell_interception": False,
             "raw_shell_auto_intercepted": adapter_installed,
             "raw_shell_coverage_ready": raw_shell_coverage_ready,
             "raw_shell_gap": ""

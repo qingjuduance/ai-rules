@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common import cli_arguments as common_cli_args
+from ai_client_governance.runtime import tool_gateway
 
 
 COMPONENT_KINDS = {
@@ -323,7 +324,7 @@ TASK_TYPE_DEFINITIONS: dict[str, TaskTypeDefinition] = {
         mutating=True,
         requires_tracking=True,
         requires_approval=True,
-        keywords=("multi-agent", "sub-agent", "delegated agent", "主从", "子 AI", "子AI", "多智能体"),
+        keywords=("multi-agent", "sub-agent", "delegated agent", "委派 Agent", "主从", "多智能体"),
     ),
     "long-running": TaskTypeDefinition(
         id="long-running",
@@ -880,7 +881,7 @@ def default_components() -> list[ComponentDefinition]:
                 "join_point": "write-intent",
                 "required_event": "command-compression.analysis",
                 "aop_role": "around-advice",
-                "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists",
+                "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter; host-native raw shell prevention requires host-client integration",
             },
         ),
         component(
@@ -918,7 +919,7 @@ def default_components() -> list[ComponentDefinition]:
                 "required_event": "command-compression.analysis",
                 "aop_role": "around-advice",
                 "coverage": "mutating-task-fast-path",
-                "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists",
+                "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter; host-native raw shell prevention requires host-client integration",
             },
         ),
         component(
@@ -1208,13 +1209,14 @@ def default_components() -> list[ComponentDefinition]:
             effect="readonly",
             condition=(
                 "Run at the host-client write boundary. Entry documents and model instructions are insufficient; "
-                "Trae/Doubao/Codex-style writes must be backed by an approved active task and a task worktree row."
+                "host-client writes must be backed by an approved active task and a task worktree row."
             ),
             dedupe_key="task_id:write-intent:approved-task-worktree",
             performance_budget="single SQLite task-record read; no repository scan",
             metadata={
                 "adapter_role": "prewrite-approval-worktree",
                 "blocked_gap": "client can otherwise write files or run shell commands after reading prose rules only",
+                "known_client_examples": ("codex", "trae", "doubao", "claude-code", "cursor"),
             },
         ),
         component(
@@ -1319,13 +1321,14 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="report_only",
             effect="readonly",
             condition=(
-                "Use when updating Codex/Trae/client UI Todo items; Todo state must be regenerated from "
+                "Use when updating host-client Todo or task UI projections; Todo state must be regenerated from "
                 "task-queue/task-record rather than treated as an independent fact source."
             ),
             performance_budget="single SQLite task-queue read; no repository scan",
             metadata={
                 "source_policy": "derived_from_task_queue_not_fact_source",
                 "durable_sources": ("task-queue", "task-record"),
+                "known_client_examples": ("codex", "trae"),
             },
         ),
         component(
@@ -1333,9 +1336,83 @@ def default_components() -> list[ComponentDefinition]:
             "processing-interceptor",
             "coordination",
             310,
-            "Require structured multi-agent acceptance matrix evidence.",
+            "Require structured cross-client multi-agent acceptance matrix evidence.",
             task_types=("multi-agent",),
             fail_policy="fail_closed",
+            requires_facts=("multi_agent_acceptance_matrix", "executor_agent", "executor_client_type"),
+            produces_facts=("multi_agent_req_gate_coverage", "multi_agent_failure_success_paths"),
+            mechanism_label="task-gate validates ## 多 Agent 验收矩阵",
+            gate_label="multi-agent-acceptance-matrix",
+            gate_step="task-gate",
+            condition=(
+                "Run for multi-agent task tracking; deprecated 子 AI tables are rejected instead of treated as a "
+                "compatibility path."
+            ),
+            metadata={
+                "section": "多 Agent 验收矩阵",
+                "required_columns": (
+                    "执行 Agent",
+                    "执行客户端",
+                    "覆盖 REQ",
+                    "覆盖门禁",
+                    "全面覆盖判定",
+                    "失败路径",
+                    "成功路径",
+                    "发现问题/修复复测",
+                ),
+                "client_identity_field": "执行客户端",
+                "deprecated_sections_rejected": ("子 AI 验收矩阵", "子智能体验收矩阵", "多智能体验收矩阵"),
+            },
+        ),
+        component(
+            "coordination.gate.agent-review-result",
+            "cross-cutting-gate",
+            "coordination",
+            312,
+            "Require final cross-client Agent review pass/fail facts before closing multi-agent work.",
+            task_types=("multi-agent",),
+            events=("final-output", "merge-cleanup"),
+            final_only=True,
+            fail_policy="fail_closed",
+            requires_facts=("agent-review-result.analysis", "worktree_live_state", "final_gate"),
+            produces_facts=("agent_review_pass_fail", "reviewed_executor_coverage", "retest_result"),
+            mechanism_label="task-record gate --event final validates agent-review-result.analysis",
+            gate_label="agent-review-result",
+            gate_step="task-record gate",
+            condition=(
+                "Run before final-output, worktree closeout, host closeout, or task-queue done for multi-agent "
+                "tasks; every executor task or leaf must have an independent reviewer Agent and client_type."
+            ),
+            metadata={
+                "event_type": "agent-review-result.analysis",
+                "required_review_fields": (
+                    "executor_agent",
+                    "executor_client_type",
+                    "reviewer_agent",
+                    "reviewer_client_type",
+                    "reviewed_task_id_or_leaf_id",
+                    "decision",
+                    "lifecycle_fact_check",
+                    "commit_status_check",
+                    "unhandled_items",
+                    "low_quality_items",
+                    "evidence",
+                    "remediation_guidance",
+                    "retest_plan",
+                    "retest_result",
+                ),
+                "blocking_conditions": (
+                    "missing_review",
+                    "non_pass_decision",
+                    "same_executor_and_reviewer_identity",
+                    "unresolved_unhandled_items",
+                    "unresolved_low_quality_items",
+                    "missing_remediation",
+                    "missing_or_failed_retest",
+                    "stale_or_blocking_lifecycle_fact",
+                ),
+                "known_client_type_examples": ("codex", "trae", "claude-code", "cursor", "cline"),
+            },
         ),
         component(
             "session.interceptor.pending-recovery",
@@ -1683,9 +1760,9 @@ def default_components() -> list[ComponentDefinition]:
             "cross-cutting-gate",
             "final-gate",
             800,
-            "Validate ai-client-governance architecture boundaries before closeout.",
+            "Validate ai-client-governance architecture and no-legacy-fallback boundaries before closeout.",
             final_only=True,
-            gate_label="ai_client_governance.py architecture-guard",
+            gate_label="ai_client_governance.py architecture-guard --check-no-legacy-fallback",
             gate_step="architecture-guard",
             fail_policy="fail_closed",
         ),
@@ -1739,6 +1816,35 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "reporter.tool-gateway-schema",
+            "reporter",
+            "report",
+            892,
+            "Report schema-first tool gateway specs and host-client dispatch boundary.",
+            events=("status-output", "resume", "final-output"),
+            mechanism_label="ai_client_governance.py runtime tool-gateway",
+            gate_step="tool-gateway",
+            fail_policy="report_only",
+            produces_facts=("tool_gateway_schema",),
+            effect="readonly",
+            condition=(
+                "Run when reporting function-calling/tool schema, compact output policy, "
+                "or host-client capability boundaries."
+            ),
+            performance_budget="constant-size in-process schema render; no repository scan or DB write",
+            metadata={
+                "command": "ai_client_governance.py runtime tool-gateway --format json",
+                "top_level_alias": "ai_client_governance.py tool-gateway --format json",
+                "gateway_status": "plugin_registry_only",
+                "host_client_integration_required": True,
+                "required_tool_fields": tool_gateway.REQUIRED_TOOL_FIELDS,
+                "capability_boundary": (
+                    "Schemas are plugin-enforceable when this gateway is called; mandatory host "
+                    "agent dispatch requires host-client integration."
+                ),
+            },
+        ),
+        component(
             "reporter.telemetry",
             "reporter",
             "report",
@@ -1774,7 +1880,7 @@ def default_components() -> list[ComponentDefinition]:
             "reporter",
             "report",
             900,
-            "Report whether the host shell path is adapter-backed or still a raw-shell gap.",
+            "Report governed shell invocation evidence and any host-client raw-shell integration gap.",
             events=("status-output", "resume", "final-output"),
             final_only=True,
             mechanism_label="ai_client_governance.py shell-adapter diagnose",
@@ -1790,8 +1896,8 @@ def default_components() -> list[ComponentDefinition]:
                     "no-profile command proxy telemetry",
                     "optional explicit profile shim marker",
                     "adapter telemetry event count",
-                    "fail-closed readiness",
-                    "raw shell gap",
+                    "governed-command fail-closed readiness",
+                    "host-client raw shell integration gap",
                 ),
                 "fact_source": ".ai-client/project/state/aicg.db plus optional PowerShell profile marker; command proxy must not write user profiles",
                 "non_invasive_default": "no-profile command proxy, comparable to a project-local virtual environment activation",
@@ -2083,6 +2189,20 @@ def parse_args() -> argparse.Namespace:
     export_declarative.add_argument("--check", action="store_true", help="Exit non-zero when output would change.")
     export_declarative.add_argument("--format", choices=("text", "json"), default="text")
 
+    capability_report = subparsers.add_parser(
+        "capability-report",
+        help="Report plugin, host-client, and model/API capability boundaries.",
+    )
+    capability_report.add_argument("--capability", help="Only show one capability id.")
+    capability_report.add_argument("--format", choices=("text", "json"), default="text")
+
+    tool_gateway_parser = subparsers.add_parser(
+        "tool-gateway",
+        help="Output schema-first agent tool gateway specs.",
+    )
+    tool_gateway_parser.add_argument("--tool", help="Only show one tool by name.")
+    tool_gateway_parser.add_argument("--format", choices=("text", "json"), default="text")
+
     manifest_report = subparsers.add_parser("manifest-report", help="Compare runtime registry facts with manifest.json.")
     common_cli_args.add_common_global_args(manifest_report, names=("root",))
     manifest_report.add_argument("--manifest", default="manifest.json")
@@ -2176,6 +2296,8 @@ def render_task_types(registry: ComponentRegistry, fmt: str) -> str:
 EXPECTED_RUNTIME_COMMAND_KEYS = {
     "components",
     "exportDeclarativeRegistry",
+    "capabilityReport",
+    "toolGateway",
     "contractDescribe",
     "taskRunPlan",
     "taskRunRun",
@@ -2202,13 +2324,143 @@ EXPECTED_RUNTIME_COMMAND_KEYS = {
 }
 
 
+CAPABILITY_BOUNDARY_CLASSES = (
+    "plugin-enforceable",
+    "plugin-auditable",
+    "host-client-required",
+    "model-api-required",
+)
+
+CAPABILITY_MATRIX: tuple[dict[str, Any], ...] = (
+    {
+        "id": "compact-tool-output",
+        "boundary_class": "plugin-enforceable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-enforceable",
+        "summary": "CLI/report commands can default to compact, filtered, artifact-linked output.",
+    },
+    {
+        "id": "task-evidence-db",
+        "boundary_class": "plugin-enforceable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-enforceable",
+        "summary": "Task records, corrections, framework debt, and telemetry are persisted in SQLite.",
+    },
+    {
+        "id": "tool-gateway-schema-publication",
+        "boundary_class": "plugin-enforceable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-enforceable",
+        "summary": "The plugin publishes tool schemas; host clients must integrate them to make dispatch mandatory.",
+    },
+    {
+        "id": "governed-command-telemetry",
+        "boundary_class": "plugin-auditable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-auditable",
+        "summary": "Governed wrappers can record command spans and compact summaries for calls routed through them.",
+    },
+    {
+        "id": "token-proxy-metrics",
+        "boundary_class": "plugin-auditable",
+        "control_layer": "plugin",
+        "enforcement_level": "plugin-auditable",
+        "summary": "The plugin can audit bytes, lines, command counts, and compact-output policy as token proxies.",
+    },
+    {
+        "id": "mandatory-agent-tool-routing",
+        "boundary_class": "host-client-required",
+        "control_layer": "host-client",
+        "enforcement_level": "host-client-required",
+        "summary": "Only the host client can force the model/agent loop to dispatch every tool call through the gateway.",
+    },
+    {
+        "id": "raw-host-shell-prevention",
+        "boundary_class": "host-client-required",
+        "control_layer": "host-client-or-sandbox",
+        "enforcement_level": "not-plugin-enforceable",
+        "summary": "Repository scripts can audit governed wrapper calls, but cannot prove no host-native raw shell occurred.",
+    },
+    {
+        "id": "exact-token-accounting",
+        "boundary_class": "model-api-required",
+        "control_layer": "model-api-or-host-client",
+        "enforcement_level": "not-plugin-enforceable",
+        "summary": "The plugin can record proxy metrics such as bytes, lines, and item counts until real token data is exposed.",
+    },
+    {
+        "id": "prompt-caching-model-routing",
+        "boundary_class": "model-api-required",
+        "control_layer": "model-api-or-host-client",
+        "enforcement_level": "model-api-required",
+        "summary": "Prompt cache, model choice, and API conversation state must be controlled outside the repository plugin.",
+    },
+)
+
+
+def build_capability_report(capability_id: str = "") -> dict[str, Any]:
+    rows = [item for item in CAPABILITY_MATRIX if not capability_id or item["id"] == capability_id]
+    by_level: dict[str, list[dict[str, Any]]] = {
+        "plugin_enforceable": [],
+        "plugin_auditable": [],
+        "host_client_required": [],
+        "model_api_required": [],
+    }
+    classification_warnings: list[str] = []
+    for item in rows:
+        boundary_class = str(item.get("boundary_class") or "")
+        if boundary_class not in CAPABILITY_BOUNDARY_CLASSES:
+            classification_warnings.append(f"{item.get('id', '<unknown>')}: invalid boundary_class={boundary_class}")
+            boundary_class = "plugin-auditable"
+        by_level[boundary_class.replace("-", "_")].append(item)
+    return {
+        "schema_version": 1,
+        "status": "pass" if rows and not classification_warnings else "fail",
+        "capability_count": len(rows),
+        "capabilities": rows,
+        "boundary_classes": list(CAPABILITY_BOUNDARY_CLASSES),
+        "classification_warnings": classification_warnings,
+        **by_level,
+        "boundary": (
+            "ai-client-governance is a repository plugin. It can enforce local CLI/schema/DB behavior "
+            "only on calls routed through it; host-client and model/API controls remain explicit integrations."
+        ),
+    }
+
+
+def render_capability_report(report: dict[str, Any]) -> str:
+    lines = [
+        "AI Client Governance Capability Boundary Report",
+        f"Status: {report['status']}",
+        f"Capabilities: {report['capability_count']}",
+        f"Boundary: {report['boundary']}",
+    ]
+    for item in report["capabilities"]:
+        lines.append(
+            f"- {item['id']}: {item.get('boundary_class')} / {item['control_layer']} / "
+            f"{item['enforcement_level']} - {item['summary']}"
+        )
+    return "\n".join(lines)
+
+
 def manifest_path(root: Path, value: str) -> Path:
     path = Path(value or "manifest.json")
     return path if path.is_absolute() else root / path
 
 
+def resolve_registry_root(root: Path) -> Path:
+    """Resolve runtime registry commands to the governance repository root."""
+    if (root / "manifest.json").exists() and (root / "src" / "ai_client_governance").exists():
+        return root
+    embedded = root / ".ai-client" / "ai-client-governance"
+    if (embedded / "manifest.json").exists() and (embedded / "src" / "ai_client_governance").exists():
+        return embedded
+    return root
+
+
 def write_declarative_registry(args: argparse.Namespace) -> dict[str, Any]:
-    root = Path(args.root).resolve()
+    requested_root = Path(args.root).resolve()
+    root = resolve_registry_root(requested_root)
     output = manifest_path(root, args.output)
     payload = serialize_declarative_registry()
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -2219,6 +2471,8 @@ def write_declarative_registry(args: argparse.Namespace) -> dict[str, Any]:
         output.write_text(text, encoding="utf-8")
     return {
         "output": output.as_posix(),
+        "requested_root": requested_root.as_posix(),
+        "resolved_root": root.as_posix(),
         "status": "fail" if args.check and changed else "pass",
         "changed": changed,
         "component_count": len(payload["components"]),
@@ -2244,7 +2498,8 @@ def registry_signature(registry: ComponentRegistry) -> dict[str, Any]:
 
 
 def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
-    root = Path(args.root).resolve()
+    requested_root = Path(args.root).resolve()
+    root = resolve_registry_root(requested_root)
     path = manifest_path(root, args.manifest)
     manifest = json.loads(path.read_text(encoding="utf-8-sig"))
     runtime = manifest.get("runtimeArchitecture") or {}
@@ -2281,6 +2536,8 @@ def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
             )
     return {
         "manifest": path.as_posix(),
+        "requested_root": requested_root.as_posix(),
+        "resolved_root": root.as_posix(),
         "declarative_registry": declarative_path.as_posix(),
         "declarative_registry_status": declarative_status,
         "status": "pass" if not drifts else "fail",
@@ -2331,6 +2588,23 @@ def main() -> int:
             verb = "would update" if args.check and result["changed"] else "updated" if result["changed"] else "up to date"
             print(f"Declarative runtime registry {verb}: {result['output']}")
         return 1 if result["status"] == "fail" else 0
+    if args.command == "capability-report":
+        report = build_capability_report(args.capability or "")
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_capability_report(report))
+        return 0 if report["status"] == "pass" else 1
+    if args.command == "tool-gateway":
+        report = tool_gateway.build_report(args.tool or "")
+        if args.tool and not report["tools"]:
+            print(f"unknown tool gateway spec: {args.tool}")
+            return 1
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(tool_gateway.render_text(report))
+        return 0 if report["validation_status"] == "pass" else 1
     if args.command == "manifest-report":
         report = build_manifest_report(args)
         if args.format == "json":

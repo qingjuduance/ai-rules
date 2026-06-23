@@ -20,6 +20,7 @@ from ai_client_governance.common.paths import (
     TOOL_INVOCATIONS_DIR,
     ai_client_governance_entrypoint,
     ai_client_governance_root,
+    host_project_root,
 )
 from ai_client_governance.records import state_store
 from ai_client_governance.records import task_record as structured_task_record
@@ -228,7 +229,7 @@ def input_gate_section_text(variant: str = "complete") -> str:
         "用户要求摘要",
         "记录判定",
         "联网/搜索判定",
-        "子 AI/验证判定",
+        "Agent/验证判定",
         "验收/最终回复覆盖口径",
     ]
     rows = [
@@ -237,7 +238,7 @@ def input_gate_section_text(variant: str = "complete") -> str:
             "验证修改型任务必须记录 worktree evidence。",
             "必须记录到用户要求追踪、触发日志和验证记录。",
             "不触发联网搜索；无需联网。",
-            "不触发子 AI；触发 selftest、task-gate、失败路径和成功路径验证。",
+            "不触发 Agent；触发 selftest、task-gate、失败路径和成功路径验证。",
             "最终回复覆盖 worktree evidence 的强制失败或通过。",
         ],
         [
@@ -245,7 +246,7 @@ def input_gate_section_text(variant: str = "complete") -> str:
             "验证 task queue 按显式 task-id 完成任务。",
             "必须记录到用户要求追踪、触发日志和验证记录。",
             "不触发联网搜索；无需联网。",
-            "不触发子 AI；触发 selftest、task-gate、失败路径和成功路径验证。",
+            "不触发 Agent；触发 selftest、task-gate、失败路径和成功路径验证。",
             "最终回复覆盖旧任务 cancelled、新任务 completed。",
         ],
     ]
@@ -254,7 +255,7 @@ def input_gate_section_text(variant: str = "complete") -> str:
     elif variant == "missing-network":
         remove_index = headers.index("联网/搜索判定")
     elif variant == "missing-validation":
-        remove_index = headers.index("子 AI/验证判定")
+        remove_index = headers.index("Agent/验证判定")
     else:
         remove_index = -1
     if remove_index >= 0:
@@ -332,11 +333,17 @@ REQ-SELFTEST-01 已完成，REQ-SELFTEST-02 已完成；这里故意不用标准
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 {output_gate_rows(worktree_output_variant)}
 
-## 子 AI 验收矩阵
+## 多 Agent 验收矩阵
 
-| 子 AI | 覆盖 REQ | 覆盖门禁 | 全面覆盖判定 | 失败路径 | 成功路径 | 发现问题/修复复测 |
-|---|---|---|---|---|---|---|
-| selftest-local | REQ-SELFTEST-01、REQ-SELFTEST-02 | 输入拆解门禁、输出门禁、git worktree 门禁、task queue 门禁 | 全面覆盖本 selftest 范围，无遗漏 | 缺输入拆解、缺 status、泛化 worktree 输出均应失败 exit 1 | 补齐输入、status 和严格 closeout 后应通过 exit 0 | 无子 AI；本地黑盒发现即修复并复测 |
+| 执行 Agent | 执行客户端 | 覆盖 REQ | 覆盖门禁 | 全面覆盖判定 | 失败路径 | 成功路径 | 发现问题/修复复测 |
+|---|---|---|---|---|---|---|---|
+| selftest-executor | codex | REQ-SELFTEST-01、REQ-SELFTEST-02 | 输入拆解门禁、输出门禁、git worktree 门禁、task queue 门禁 | 全面覆盖本 selftest 范围，无遗漏 | 缺输入拆解、缺 status、泛化 worktree 输出均应失败 exit 1 | 补齐输入、status 和严格 closeout 后应通过 exit 0 | 无未处理问题；本地黑盒发现即修复并复测通过 |
+
+## 多 Agent 审批结论
+
+| 执行 Agent | 执行客户端 | 执行任务 | 复核 Agent | 复核客户端 | 复核结果 | 生命周期事实检查 | 提交状态检查 | 未处理项 | 处理质量不足 | 证据 | 整改建议 | 复测 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| selftest-executor | codex | SELFTEST-LEAF-01 | selftest-reviewer | trae | pass 通过 | task queue lifecycle pass；task-record status pass；requirements/triggers/outputs/worktrees/validations/events pass；final gate pass；worktree live state clean；validation results pass；telemetry raw shell gap none；active/pending state closed | commit not required；merge not merged；push not pushed | 无未处理项 | 无处理质量不足 | task-gate/selftest 输出和临时 DB 记录 | 无需整改 | retest 复测通过 |
 
 ## 任务类型门禁
 
@@ -620,31 +627,61 @@ def test_multi_agent_acceptance_matrix_gate(root: Path, run_dir: Path) -> TestRe
     missing_matrix = run_dir / "missing-multi-agent-matrix.md"
     incomplete_matrix = run_dir / "incomplete-multi-agent-matrix.md"
     prose_matrix = run_dir / "prose-multi-agent-matrix.md"
+    old_matrix = run_dir / "old-multi-agent-matrix.md"
+    missing_review = run_dir / "missing-multi-agent-review.md"
+    failed_review = run_dir / "failed-multi-agent-review.md"
     complete = run_dir / "complete-multi-agent-matrix.md"
 
-    incomplete_section = """## 子 AI 验收矩阵
+    incomplete_section = """## 多 Agent 验收矩阵
 
-| 子 AI | 覆盖 REQ | 覆盖门禁 | 全面覆盖判定 | 成功路径 | 发现问题/修复复测 |
+| 执行 Agent | 覆盖 REQ | 覆盖门禁 | 全面覆盖判定 | 成功路径 | 发现问题/修复复测 |
 |---|---|---|---|---|---|
-| selftest-local | REQ-SELFTEST-01、REQ-SELFTEST-02 | 输入拆解门禁、输出门禁、git worktree 门禁、task queue 门禁 | 全面覆盖本 selftest 范围，无遗漏 | 补齐输入、status 和严格 closeout 后应通过 exit 0 | 无问题 |
+| selftest-executor | REQ-SELFTEST-01、REQ-SELFTEST-02 | 输入拆解门禁、输出门禁、git worktree 门禁、task queue 门禁 | 全面覆盖本 selftest 范围，无遗漏 | 补齐输入、status 和严格 closeout 后应通过 exit 0 | 无问题 |
 """
-    prose_section = """## 子 AI 验收矩阵
+    prose_section = """## 多 Agent 验收矩阵
 
 REQ-SELFTEST-01、REQ-SELFTEST-02 的门禁全面覆盖，失败路径 exit 1，成功路径 exit 0，发现问题后修复复测。
 """
+    old_section = """## 子 AI 验收矩阵
+
+| 子 AI | 覆盖 REQ | 覆盖门禁 | 全面覆盖判定 | 失败路径 | 成功路径 | 发现问题/修复复测 |
+|---|---|---|---|---|---|---|
+| selftest-local | REQ-SELFTEST-01、REQ-SELFTEST-02 | 输入拆解门禁、输出门禁 | 全面覆盖，无遗漏 | 缺失应失败 | 补齐应通过 | 无问题 |
+"""
+    failed_review_section = """## 多 Agent 审批结论
+
+| 执行 Agent | 执行客户端 | 执行任务 | 复核 Agent | 复核客户端 | 复核结果 | 生命周期事实检查 | 提交状态检查 | 未处理项 | 处理质量不足 | 证据 | 整改建议 | 复测 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| selftest-executor | codex | SELFTEST-LEAF-01 | selftest-reviewer | trae | fail 不通过 | task queue lifecycle pass；task-record status pass；requirements/triggers/outputs/worktrees/validations/events pass；final gate pass；worktree live state clean；validation results pass；telemetry raw shell gap none；active/pending state closed | commit not required；merge not merged；push not pushed | 无未处理项 | 无处理质量不足 | task-gate/selftest 输出和临时 DB 记录 | 退回执行 Agent 修复 | retest 复测失败 |
+"""
 
     missing_matrix.write_text(
-        replace_section(complete_text, "子 AI 验收矩阵", ""),
+        replace_section(complete_text, "多 Agent 验收矩阵", ""),
         encoding="utf-8",
         newline="\n",
     )
     incomplete_matrix.write_text(
-        replace_section(complete_text, "子 AI 验收矩阵", incomplete_section),
+        replace_section(complete_text, "多 Agent 验收矩阵", incomplete_section),
         encoding="utf-8",
         newline="\n",
     )
     prose_matrix.write_text(
-        replace_section(complete_text, "子 AI 验收矩阵", prose_section),
+        replace_section(complete_text, "多 Agent 验收矩阵", prose_section),
+        encoding="utf-8",
+        newline="\n",
+    )
+    old_matrix.write_text(
+        replace_section(complete_text, "多 Agent 验收矩阵", old_section),
+        encoding="utf-8",
+        newline="\n",
+    )
+    missing_review.write_text(
+        replace_section(complete_text, "多 Agent 审批结论", ""),
+        encoding="utf-8",
+        newline="\n",
+    )
+    failed_review.write_text(
+        replace_section(complete_text, "多 Agent 审批结论", failed_review_section),
         encoding="utf-8",
         newline="\n",
     )
@@ -654,9 +691,12 @@ REQ-SELFTEST-01、REQ-SELFTEST-02 的门禁全面覆盖，失败路径 exit 1，
         run_command(task_gate_command(root, missing_matrix, "multi-agent"), cwd=root, env_root=root),
         run_command(task_gate_command(root, incomplete_matrix, "multi-agent"), cwd=root, env_root=root),
         run_command(task_gate_command(root, prose_matrix, "multi-agent"), cwd=root, env_root=root),
+        run_command(task_gate_command(root, old_matrix, "multi-agent"), cwd=root, env_root=root),
+        run_command(task_gate_command(root, missing_review, "multi-agent"), cwd=root, env_root=root),
+        run_command(task_gate_command(root, failed_review, "multi-agent"), cwd=root, env_root=root),
         run_command(task_gate_command(root, complete, "multi-agent"), cwd=root, env_root=root),
     ]
-    missing_failed = commands[0].exit_code != 0 and "子 AI 验收矩阵" in (
+    missing_failed = commands[0].exit_code != 0 and "多 Agent 验收矩阵" in (
         commands[0].stdout + commands[0].stderr
     )
     incomplete_failed = commands[1].exit_code != 0 and "structured table" in (
@@ -665,13 +705,30 @@ REQ-SELFTEST-01、REQ-SELFTEST-02 的门禁全面覆盖，失败路径 exit 1，
     prose_failed = commands[2].exit_code != 0 and "structured table" in (
         commands[2].stdout + commands[2].stderr
     )
-    complete_passed = commands[3].exit_code == 0
-    passed = missing_failed and incomplete_failed and prose_failed and complete_passed
+    old_failed = commands[3].exit_code != 0 and "deprecated multi-agent section" in (
+        commands[3].stdout + commands[3].stderr
+    )
+    missing_review_failed = commands[4].exit_code != 0 and "多 Agent 审批结论" in (
+        commands[4].stdout + commands[4].stderr
+    )
+    failed_review_failed = commands[5].exit_code != 0 and "final pass" in (
+        commands[5].stdout + commands[5].stderr
+    )
+    complete_passed = commands[6].exit_code == 0
+    passed = (
+        missing_failed
+        and incomplete_failed
+        and prose_failed
+        and old_failed
+        and missing_review_failed
+        and failed_review_failed
+        and complete_passed
+    )
     return TestResult(
         name="multi-agent-acceptance-matrix-required",
         passed=passed,
         summary=(
-            "missing, incomplete, and prose-only multi-agent matrices failed; complete matrix passed"
+            "missing, incomplete, prose-only, deprecated, and failed-review multi-agent records failed; complete cross-client review passed"
             if passed
             else "multi-agent acceptance matrix enforcement did not match expected behavior"
         ),
@@ -1538,7 +1595,7 @@ def test_gate_pool_validate_doc_tracking_context(root: Path, run_dir: Path) -> T
 
 - 下一步：selftest 自动清理临时目录。
 - 当前 Git 状态：不修改真实 Git 状态。
-- 子 AI 状态：不适用。
+- Agent 状态：不适用。
 - 禁止误动范围：不提交、不推送、不修改业务文档。
 
 ## 最终结论
@@ -1960,6 +2017,16 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "event_type": structured_task_record.CAPABILITY_GATEWAY_FACTS_EVENT,
                 "payload": {
                     "join_point": "host-capability-boundary",
+                    "capability_fact_kind": "registration",
+                    "control_layer": "plugin",
+                    "enforcement_level": "audit_only",
+                    "hard_enforcement_available": False,
+                    "registration_event": True,
+                    "invocation_telemetry_required": True,
+                    "residual_risk": (
+                        "selftest records plugin registration facts only; host-native raw shell prevention "
+                        "requires host-client integration"
+                    ),
                     "lifecycle_input_filter_enforced": True,
                     "prewrite_runtime_adapter": "task-record gate --event preflight",
                     "runtime_adapter_components": [
@@ -1969,7 +2036,10 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                         "preflight.interceptor.raw-shell-coverage",
                     ],
                     "shell_enforcement_mode": "non-invasive-command-proxy",
+                    "shell_control_layer": "plugin-command-wrapper",
+                    "shell_enforcement_scope": "governed_commands_only",
                     "shell_command_proxy": "shell-adapter proxy-powershell",
+                    "raw_host_shell_interception": False,
                     "profile_policy": "no_profile",
                     "profile_touched": False,
                     "user_shell_impact": "none",
@@ -2095,6 +2165,46 @@ def design_package_payload(task_id: str) -> dict[str, object]:
             ],
             "handoff_instructions": "Executor reads this payload before implementation; reviewer gates against it.",
         },
+    }
+
+
+def agent_review_result_payload(task_id: str, *, decision: str = "pass") -> dict[str, object]:
+    passed = decision == "pass"
+    return {
+        "schema_version": 1,
+        "reviews": [
+            {
+                "executor_agent": "selftest-executor",
+                "executor_client_type": "codex",
+                "reviewer_agent": "selftest-reviewer",
+                "reviewer_client_type": "trae",
+                "reviewed_task_id": task_id,
+                "reviewed_leaf_id": "SELFTEST-LEAF-01",
+                "decision": "pass" if passed else "fail",
+                "lifecycle_fact_check": {
+                    "task_queue_lifecycle": "pass",
+                    "task_record_status": "done",
+                    "requirements_triggers_outputs_worktrees_validations_events": "pass",
+                    "final_gate": "pass",
+                    "worktree_live_state": "clean",
+                    "branch_head_dirty_status": "clean",
+                    "validation_results": "pass",
+                    "telemetry_raw_shell_gap": "none",
+                    "active_pending_state": "closed",
+                },
+                "commit_status_check": {
+                    "commit": "not required for selftest",
+                    "merge": "not merged",
+                    "push": "not pushed",
+                },
+                "unhandled_items": [],
+                "low_quality_items": [],
+                "evidence": ["task-record gate output", "selftest fixture DB rows"],
+                "remediation_guidance": "no remediation required" if passed else "return to executor",
+                "retest_plan": "rerun task-record gate final",
+                "retest_result": "pass" if passed else "fail",
+            }
+        ],
     }
 
 
@@ -2900,6 +3010,140 @@ def test_multi_agent_dispatch_brief_gate(root: Path, run_dir: Path) -> TestResul
             "multi-agent task-record gates require a structured dispatch brief"
             if passed
             else "multi-agent dispatch brief gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_multi_agent_review_result_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "multi-agent-review.db"
+    missing_task = "MULTI-AGENT-REVIEW-MISSING"
+    failed_task = "MULTI-AGENT-REVIEW-FAILED"
+    valid_task = "MULTI-AGENT-REVIEW-VALID"
+
+    def multi_agent_payload(task_id: str, *, review: dict[str, object] | None) -> dict[str, object]:
+        payload = structured_payload(task_id)
+        payload["task"]["task_types"] = ["rules-script", "multi-agent"]  # type: ignore[index]
+        for event_payload in payload["events"]:  # type: ignore[index]
+            if isinstance(event_payload, dict) and event_payload.get("event_type") == structured_task_record.AGENT_DECISION_EVENT:
+                event_body = event_payload.get("payload")
+                if isinstance(event_body, dict):
+                    event_body["agent_group_decision"] = "spawned"
+                    event_body["spawn_count"] = 1
+                    event_body["no_spawn_reason"] = ""
+                    event_body["alternative_validation"] = ""
+                    event_body["residual_risk"] = ""
+        payload["events"].append(  # type: ignore[index]
+            {
+                "event_id": f"EVT-{task_id}-AGENT-BRIEF",
+                "event_type": structured_task_record.AGENT_DISPATCH_BRIEF_EVENT,
+                "payload": {
+                    "task_id": task_id,
+                    "worktree_path": "selftest",
+                    "write_scope": ["src/ai_client_governance/records/task_record.py"],
+                    "forbidden_paths": ["none"],
+                    "validation_commands": ["python -m py_compile src/ai_client_governance/records/task_record.py"],
+                    "return_capsule": "summary, changed files, validation results, residual risks",
+                    "context_reuse": "new",
+                },
+            }
+        )
+        if review is not None:
+            payload["events"].append(  # type: ignore[index]
+                {
+                    "event_id": f"EVT-{task_id}-AGENT-REVIEW",
+                    "event_type": structured_task_record.AGENT_REVIEW_RESULT_EVENT,
+                    "payload": review,
+                }
+            )
+        return payload
+
+    missing_payload = multi_agent_payload(missing_task, review=None)
+    failed_payload = multi_agent_payload(failed_task, review=agent_review_result_payload(failed_task, decision="fail"))
+    valid_payload = multi_agent_payload(valid_task, review=agent_review_result_payload(valid_task, decision="pass"))
+    missing = run_dir / "multi-agent-review-missing.json"
+    failed = run_dir / "multi-agent-review-failed.json"
+    valid = run_dir / "multi-agent-review-valid.json"
+    missing.write_text(json.dumps(missing_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    failed.write_text(json.dumps(failed_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    valid.write_text(json.dumps(valid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(failed)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                failed_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    missing_output = commands[2].stdout + commands[2].stderr
+    failed_output = commands[4].stdout + commands[4].stderr
+    valid_output = commands[6].stdout + commands[6].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code != 0
+        and commands[5].exit_code == 0
+        and commands[6].exit_code == 0
+        and "multi-agent final gate requires event_type=agent-review-result.analysis" in missing_output
+        and "agent review result must use reviews[]" in failed_output
+        and "agent review result facts present: agent-review-result.analysis" in valid_output
+    )
+    return TestResult(
+        name="multi-agent-review-result-gate",
+        passed=passed,
+        summary=(
+            "multi-agent final task-record gate requires passing cross-client agent-review-result facts"
+            if passed
+            else "multi-agent review result gate regression failed"
         ),
         commands=commands,
     )
@@ -4634,6 +4878,151 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
     )
 
 
+def test_task_record_evidence_graph_and_command_error_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "task-record-evidence-command-error.db"
+    invalid_task = "TASK-EVIDENCE-CMD-INVALID"
+    valid_task = "TASK-EVIDENCE-CMD-VALID"
+
+    invalid_payload = structured_payload(invalid_task)
+    invalid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{invalid_task}-COMMAND-ERROR",
+            "event_type": structured_task_record.COMMAND_ERROR_EVENT,
+            "payload": {
+                "failed_command": "python -c broken",
+                "exit_code": 2,
+                "phase": "validation",
+                "parser_or_shell": "python",
+                "failure_category": "unclassified_command_failure",
+                "root_cause": "",
+                "corrected_command": "",
+                "retry_count": 1,
+                "dedupe_key": "selftest-command-error",
+                "preventive_rule": "classify before retry",
+                "telemetry_evidence": "span:selftest",
+                "state_impact": "none",
+                "framework_debt_decision": "not-recorded",
+            },
+        }
+    )
+
+    valid_payload = structured_payload(valid_task)
+    valid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{valid_task}-COMMAND-ERROR",
+            "event_type": structured_task_record.COMMAND_ERROR_EVENT,
+            "payload": {
+                "failed_command": "python -c broken",
+                "exit_code": 2,
+                "phase": "validation",
+                "parser_or_shell": "python",
+                "failure_category": "python_c_inline_quoting",
+                "root_cause": "inline Python command was fragile",
+                "corrected_command": "write a temporary script or use a file-backed command",
+                "retry_count": 1,
+                "dedupe_key": "selftest-command-error",
+                "preventive_rule": "use command-file rewriting for complex inline commands",
+                "telemetry_evidence": "span:selftest",
+                "state_impact": "no repository state changed",
+                "framework_debt_decision": "covered-by-command-error-interceptor",
+            },
+        }
+    )
+
+    invalid_path = run_dir / "task-record-command-error-invalid.json"
+    valid_path = run_dir / "task-record-command-error-valid.json"
+    write_text_lf(invalid_path, json.dumps(invalid_payload, ensure_ascii=False, indent=2))
+    write_text_lf(valid_path, json.dumps(valid_payload, ensure_ascii=False, indent=2))
+
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(invalid_path)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                invalid_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid_path)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "evidence-graph",
+                "--task-id",
+                valid_task,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    invalid_output = commands[2].stdout + commands[2].stderr
+    valid_output = commands[4].stdout + commands[4].stderr
+    graph: dict[str, object] = {}
+    try:
+        graph = json.loads(commands[5].stdout)
+    except json.JSONDecodeError:
+        pass
+    linked_counts = graph.get("linked_counts", {}) if isinstance(graph.get("linked_counts"), dict) else {}
+    events = linked_counts.get("events", {}) if isinstance(linked_counts.get("events"), dict) else {}
+    requirements = linked_counts.get("requirements", {}) if isinstance(linked_counts.get("requirements"), dict) else {}
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and commands[5].exit_code == 0
+        and "command-error.analysis events must classify failures" in invalid_output
+        and "command-error analysis facts present" in valid_output
+        and graph.get("status") == "pass"
+        and int(events.get("count", 0)) >= 1
+        and int(requirements.get("count", 0)) >= 1
+        and graph.get("correlation_spine", {}).get("root") == "task_id"
+    )
+    return TestResult(
+        name="task-record-evidence-graph-command-error-gate",
+        passed=passed,
+        summary=(
+            "task-record evidence-graph links task evidence and final gate rejects unclassified command errors"
+            if passed
+            else "task-record evidence graph or command-error gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
     from ai_client_governance.worktree.task import closeout_owned_host_paths
 
@@ -4873,6 +5262,7 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
 
 
 def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestResult:
+    project_root = host_project_root(root)
     db = run_dir / "host-capability-entrypoint.db"
     task_id = "TASK-HOST-CAPABILITY-ENTRYPOINT-SELFTEST"
     tracking = ".ai-client/project/records/task-tracking/TASK-HOST-CAPABILITY-ENTRYPOINT-SELFTEST.md"
@@ -4887,7 +5277,7 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             "worktree-task",
             "create",
             "--project-root",
-            str(root),
+            str(project_root),
             "--title",
             "host capability no context",
             "--repo",
@@ -4896,7 +5286,7 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             "host-capability-no-context-selftest",
             "--dry-run",
         ],
-        cwd=root,
+        cwd=project_root,
         env_root=root,
     )
     with_tracking = run_command(
@@ -4906,7 +5296,7 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             "worktree-task",
             "create",
             "--project-root",
-            str(root),
+            str(project_root),
             "--title",
             "host capability with tracking",
             "--repo",
@@ -4917,22 +5307,22 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             tracking,
             "--dry-run",
         ],
-        cwd=root,
+        cwd=project_root,
         env_root=root,
     )
     complete_without_task_id = run_command(
         queue_command(root, db, "complete", "--summary", "missing explicit task id"),
-        cwd=root,
+        cwd=project_root,
         env_root=root,
     )
     transition_missing_record = run_command(
         queue_command(root, db, "transition", "--task-id", "TASK-HOST-CAPABILITY-MISSING", "--to", "active"),
-        cwd=root,
+        cwd=project_root,
         env_root=root,
     )
     enqueue_task = run_command(
         queue_command(
-            root,
+            project_root,
             db,
             "enqueue",
             "--task-id",
@@ -4948,13 +5338,14 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             "--status",
             "ready",
         ),
-        cwd=root,
+        cwd=project_root,
         env_root=root,
     )
-    apply_record = run_command(task_record_apply_command(root, db, record_path), cwd=root, env_root=root)
-    start_next = run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root)
+    apply_record = run_command(task_record_apply_command(project_root, db, record_path), cwd=project_root, env_root=root)
+    start_next = run_command(queue_command(project_root, db, "start-next", "--task-id", task_id), cwd=project_root, env_root=root)
     gateway_fact_inserted = False
     gateway_payload_non_invasive = False
+    gateway_payload_audit_boundary = False
     if db.exists():
         with structured_task_record.connect(db, create=False) as con:
             payloads = structured_task_record.event_payloads(con, task_id, "capability-gateway.facts")
@@ -4966,6 +5357,18 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
                 payload.get("profile_touched") is False
                 and payload.get("user_shell_impact") == "none"
                 and payload.get("global_path_modified") is False
+            )
+            gateway_payload_audit_boundary = (
+                payload.get("capability_fact_kind") == "registration"
+                and payload.get("control_layer") == "plugin"
+                and payload.get("enforcement_level") == "audit_only"
+                and payload.get("hard_enforcement_available") is False
+                and payload.get("registration_event") is True
+                and payload.get("invocation_telemetry_required") is True
+                and payload.get("shell_control_layer") == "plugin-command-wrapper"
+                and payload.get("shell_enforcement_scope") == "governed_commands_only"
+                and payload.get("raw_host_shell_interception") is False
+                and bool(payload.get("residual_risk"))
             )
             break
     passed = (
@@ -4982,6 +5385,7 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
         and start_next.exit_code == 0
         and gateway_fact_inserted
         and gateway_payload_non_invasive
+        and gateway_payload_audit_boundary
     )
     return TestResult(
         name="host-capability-entrypoint-gateway",
@@ -5000,6 +5404,208 @@ def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestRe
             apply_record,
             start_next,
         ],
+    )
+
+
+def test_capability_report_and_tool_gateway(root: Path, run_dir: Path) -> TestResult:
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "capability-report",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "tool-gateway",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "tool-gateway",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    capability: dict[str, object] = {}
+    gateway: dict[str, object] = {}
+    runtime_gateway: dict[str, object] = {}
+    try:
+        capability = json.loads(commands[0].stdout)
+        gateway = json.loads(commands[1].stdout)
+        runtime_gateway = json.loads(commands[2].stdout)
+    except json.JSONDecodeError:
+        pass
+    capabilities = capability.get("capabilities", []) if isinstance(capability.get("capabilities"), list) else []
+    plugin_enforceable = (
+        capability.get("plugin_enforceable", []) if isinstance(capability.get("plugin_enforceable"), list) else []
+    )
+    plugin_auditable = (
+        capability.get("plugin_auditable", []) if isinstance(capability.get("plugin_auditable"), list) else []
+    )
+    host_client_required = (
+        capability.get("host_client_required", []) if isinstance(capability.get("host_client_required"), list) else []
+    )
+    model_api_required = (
+        capability.get("model_api_required", []) if isinstance(capability.get("model_api_required"), list) else []
+    )
+    plugin_enforceable_ids = {item.get("id") for item in plugin_enforceable if isinstance(item, dict)}
+    host_client_required_ids = {item.get("id") for item in host_client_required if isinstance(item, dict)}
+    model_api_required_ids = {item.get("id") for item in model_api_required if isinstance(item, dict)}
+    raw_shell = next(
+        (
+            item for item in capabilities
+            if isinstance(item, dict) and item.get("id") == "raw-host-shell-prevention"
+        ),
+        {},
+    )
+    exact_token = next(
+        (
+            item for item in capabilities
+            if isinstance(item, dict) and item.get("id") == "exact-token-accounting"
+        ),
+        {},
+    )
+    tools = gateway.get("tools", []) if isinstance(gateway.get("tools"), list) else []
+    shell_tool = next(
+        (
+            item for item in tools
+            if isinstance(item, dict) and item.get("name") == "shell_adapter_proxy_powershell"
+        ),
+        {},
+    )
+    tool_schema = gateway.get("tool_schema", {}) if isinstance(gateway.get("tool_schema"), dict) else {}
+    required_tool_fields = set(tool_schema.get("required", [])) if isinstance(tool_schema.get("required"), list) else set()
+    required_gateway_fields = {
+        "side_effect",
+        "parallel_safe",
+        "control_layer",
+        "enforcement_level",
+        "compact_output_policy",
+    }
+    tool_field_values = gateway.get("field_values", {}) if isinstance(gateway.get("field_values"), dict) else {}
+    all_tools_have_required_fields = all(
+        isinstance(item, dict) and required_gateway_fields.issubset(item) and required_tool_fields.issubset(item)
+        for item in tools
+    )
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and capability.get("status") == "pass"
+        and isinstance(plugin_enforceable, list)
+        and len(plugin_enforceable) >= 1
+        and len(plugin_auditable) >= 1
+        and raw_shell.get("boundary_class") == "host-client-required"
+        and exact_token.get("boundary_class") == "model-api-required"
+        and "raw-host-shell-prevention" in host_client_required_ids
+        and "exact-token-accounting" in model_api_required_ids
+        and "raw-host-shell-prevention" not in plugin_enforceable_ids
+        and "exact-token-accounting" not in plugin_enforceable_ids
+        and gateway.get("gateway_status") == "plugin_registry_only"
+        and gateway.get("host_client_integration_required") is True
+        and gateway.get("validation_status") == "pass"
+        and runtime_gateway.get("tools") == gateway.get("tools")
+        and required_gateway_fields.issubset(required_tool_fields)
+        and required_gateway_fields.issubset(set(tool_field_values))
+        and all_tools_have_required_fields
+        and shell_tool.get("enforcement_level") == "governed_invocation_only"
+    )
+    return TestResult(
+        name="capability-report-and-tool-gateway",
+        passed=passed,
+        summary=(
+            "capability report and tool gateway expose plugin, host-client, and governed-invocation boundaries"
+            if passed
+            else "capability report or tool gateway boundary regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_no_legacy_fallback_guard(root: Path, run_dir: Path) -> TestResult:
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "architecture-guard",
+                "--root",
+                str(ai_client_governance_root()),
+                "--check-no-legacy-fallback",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "gate-pool",
+                "--root",
+                str(root),
+                "--final",
+                "--task-id",
+                "TASK-NO-LEGACY-FALLBACK-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    guard: dict[str, object] = {}
+    gate_plan: dict[str, object] = {}
+    try:
+        guard = json.loads(commands[0].stdout)
+        gate_plan = json.loads(commands[1].stdout)
+    except json.JSONDecodeError:
+        pass
+    legacy = guard.get("no_legacy_fallback", {}) if isinstance(guard.get("no_legacy_fallback"), dict) else {}
+    steps = gate_plan.get("steps", []) if isinstance(gate_plan.get("steps"), list) else []
+    planned_commands = [
+        " ".join(str(part) for part in item.get("command", []))
+        if isinstance(item.get("command"), list)
+        else str(item.get("command") or "")
+        for item in steps
+        if isinstance(item, dict)
+    ]
+    passed = (
+        commands[0].exit_code == 0
+        and legacy.get("status") == "pass"
+        and commands[1].exit_code == 0
+        and any("task-queue" in command and "lifecycle" in command and "--fail-on-drift" in command for command in planned_commands)
+    )
+    return TestResult(
+        name="no-legacy-fallback-and-lifecycle-gate",
+        passed=passed,
+        summary=(
+            "architecture guard rejects legacy fallback references and final gate plans task-queue lifecycle drift checks"
+            if passed
+            else "no-legacy fallback guard or lifecycle final gate planning regressed"
+        ),
+        commands=commands,
     )
 
 
@@ -5389,36 +5995,37 @@ def test_framework_debt_report(root: Path, run_dir: Path) -> TestResult:
 
 
 def test_state_db_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path) -> TestResult:
-    host = run_dir / "state-db-host-root-project"
-    worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
-    (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
-    worktree_cwd.mkdir(parents=True, exist_ok=True)
-    command = run_command(
-        [
-            sys.executable,
-            str(ai_client_governance_entrypoint()),
-            "framework-debt",
-            "list",
-            "--format",
-            "json",
-        ],
-        cwd=worktree_cwd,
-        env_root=root,
-    )
-    payload: dict[str, object] = {}
-    try:
-        payload = json.loads(command.stdout)
-    except json.JSONDecodeError:
-        pass
-    expected_db = (host / ".ai-client" / "project" / "state" / "aicg.db").resolve()
-    nested_runtime_dir = worktree_cwd / ".ai-client"
-    actual_db = Path(str(payload.get("db") or "")).resolve() if payload.get("db") else Path()
-    passed = (
-        command.exit_code == 0
-        and actual_db == expected_db
-        and expected_db.exists()
-        and not nested_runtime_dir.exists()
-    )
+    with tempfile.TemporaryDirectory(prefix="aicg-state-db-host-") as tmp:
+        host = Path(tmp) / "state-db-host-root-project"
+        worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
+        (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+        worktree_cwd.mkdir(parents=True, exist_ok=True)
+        command = run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "list",
+                "--format",
+                "json",
+            ],
+            cwd=worktree_cwd,
+            env_root=root,
+        )
+        payload: dict[str, object] = {}
+        try:
+            payload = json.loads(command.stdout)
+        except json.JSONDecodeError:
+            pass
+        expected_db = (host / ".ai-client" / "project" / "state" / "aicg.db").resolve()
+        nested_runtime_dir = worktree_cwd / ".ai-client"
+        actual_db = Path(str(payload.get("db") or "")).resolve() if payload.get("db") else Path()
+        passed = (
+            command.exit_code == 0
+            and actual_db == expected_db
+            and expected_db.exists()
+            and not nested_runtime_dir.exists()
+        )
     return TestResult(
         name="state-db-defaults-to-host-from-worktree-cwd",
         passed=passed,
@@ -5432,29 +6039,30 @@ def test_state_db_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path) 
 
 
 def test_doc_index_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path) -> TestResult:
-    host = run_dir / "doc-index-host-root-project"
-    worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
-    (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
-    worktree_cwd.mkdir(parents=True, exist_ok=True)
-    write_text_lf(worktree_cwd / "README.md", "# Worktree fixture\n")
-    command = run_command(
-        [
-            sys.executable,
-            str(ai_client_governance_entrypoint()),
-            "doc-index",
-            "check",
-            "--changed-path",
-            "README.md",
-            "--format",
-            "json",
-        ],
-        cwd=worktree_cwd,
-        env_root=root,
-        unset_env=["AICG_DOC_INDEX_OUTPUT"],
-    )
-    expected_index = (host / ".ai-client" / "project" / "doc-index" / "graph.json").resolve()
-    nested_runtime_dir = worktree_cwd / ".ai-client"
-    passed = command.exit_code == 0 and expected_index.exists() and not nested_runtime_dir.exists()
+    with tempfile.TemporaryDirectory(prefix="aicg-doc-index-host-") as tmp:
+        host = Path(tmp) / "doc-index-host-root-project"
+        worktree_cwd = host / ".ai-client" / "project" / ".worktree" / "sample-governance-worktree"
+        (host / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+        worktree_cwd.mkdir(parents=True, exist_ok=True)
+        write_text_lf(worktree_cwd / "README.md", "# Worktree fixture\n")
+        command = run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "doc-index",
+                "check",
+                "--changed-path",
+                "README.md",
+                "--format",
+                "json",
+            ],
+            cwd=worktree_cwd,
+            env_root=root,
+            unset_env=["AICG_DOC_INDEX_OUTPUT"],
+        )
+        expected_index = (host / ".ai-client" / "project" / "doc-index" / "graph.json").resolve()
+        nested_runtime_dir = worktree_cwd / ".ai-client"
+        passed = command.exit_code == 0 and expected_index.exists() and not nested_runtime_dir.exists()
     return TestResult(
         name="doc-index-defaults-to-host-from-worktree-cwd",
         passed=passed,
@@ -5469,6 +6077,11 @@ def test_doc_index_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path)
 
 def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
     governance_root = ai_client_governance_root()
+    host_fixture = run_dir / "runtime-manifest-host"
+    embedded = host_fixture / ".ai-client" / "ai-client-governance"
+    (embedded / "src" / "ai_client_governance").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(governance_root / "manifest.json", embedded / "manifest.json")
+    shutil.copy2(governance_root / "runtime-components.json", embedded / "runtime-components.json")
     commands = [
         run_command(
             [
@@ -5500,12 +6113,46 @@ def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "manifest-report",
+                "--root",
+                str(host_fixture),
+                "--check-manifest",
+                "--format",
+                "json",
+            ],
+            cwd=host_fixture,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "export-declarative-registry",
+                "--root",
+                str(host_fixture),
+                "--check",
+                "--format",
+                "json",
+            ],
+            cwd=host_fixture,
+            env_root=root,
+        ),
     ]
     export_payload: dict[str, object] = {}
     payload: dict[str, object] = {}
+    host_payload: dict[str, object] = {}
+    host_export_payload: dict[str, object] = {}
     try:
         export_payload = json.loads(commands[0].stdout)
         payload = json.loads(commands[1].stdout)
+        host_payload = json.loads(commands[2].stdout)
+        host_export_payload = json.loads(commands[3].stdout)
     except json.JSONDecodeError:
         pass
     passed = (
@@ -5515,6 +6162,11 @@ def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
         and payload.get("status") == "pass"
         and payload.get("drift_count") == 0
         and payload.get("declarative_registry_status") == "loaded"
+        and host_payload.get("status") == "pass"
+        and host_payload.get("requested_root") == host_fixture.as_posix()
+        and host_payload.get("resolved_root") == embedded.resolve().as_posix()
+        and host_export_payload.get("status") == "pass"
+        and host_export_payload.get("resolved_root") == embedded.resolve().as_posix()
     )
     return TestResult(
         name="runtime-manifest-report",
@@ -6146,6 +6798,7 @@ def main() -> int:
             test_preflight_boundary_hardening(root, run_dir),
             test_final_output_discovered_issue_gate(root, run_dir),
             test_multi_agent_dispatch_brief_gate(root, run_dir),
+            test_multi_agent_review_result_gate(root, run_dir),
             test_design_package_gate(root, run_dir),
             test_tool_flow_accepts_task_record_gate(root, run_dir),
             test_lifecycle_input_filter_preflight(root, run_dir),
@@ -6157,10 +6810,13 @@ def main() -> int:
             test_gate_pool_auto_snapshot_and_agent_trace_context(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_command_error_taxonomy_and_compact_flow(root, run_dir),
+            test_task_record_evidence_graph_and_command_error_gate(root, run_dir),
             test_file_ownership_audit(root, run_dir),
             test_install_adapter_reconcile(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
             test_host_capability_entrypoint_gateway(root, run_dir),
+            test_capability_report_and_tool_gateway(root, run_dir),
+            test_no_legacy_fallback_guard(root, run_dir),
             test_completion_test_profiles(root, run_dir),
             test_completion_test_analysis_budget(root, run_dir),
             test_framework_debt_register(root, run_dir),

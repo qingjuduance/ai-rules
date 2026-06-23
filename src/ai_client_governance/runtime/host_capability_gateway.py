@@ -64,6 +64,17 @@ def gateway_payload(*, command_name: str, join_point: str, task_id: str) -> dict
         "join_point": join_point,
         "command_name": command_name,
         "task_id": task_id,
+        "capability_fact_kind": "registration",
+        "control_layer": "plugin",
+        "enforcement_level": "audit_only",
+        "hard_enforcement_available": False,
+        "registration_event": True,
+        "invocation_telemetry_required": True,
+        "residual_risk": (
+            "This event proves the governance entrypoint recorded a task-scoped capability "
+            "boundary. It does not prove that host-native shell/tool calls outside the "
+            "governed wrapper were intercepted."
+        ),
         "lifecycle_input_filter_enforced": True,
         "prewrite_runtime_adapter": "approved-task-worktree-or-queue-task",
         "runtime_adapter_components": [
@@ -73,6 +84,9 @@ def gateway_payload(*, command_name: str, join_point: str, task_id: str) -> dict
             "preflight.interceptor.raw-shell-coverage",
         ],
         "shell_enforcement_mode": "non-invasive-command-proxy",
+        "shell_control_layer": "plugin-command-wrapper",
+        "shell_enforcement_scope": "governed_commands_only",
+        "raw_host_shell_interception": False,
         "profile_policy": "no_profile",
         "profile_touched": False,
         "user_shell_impact": "none",

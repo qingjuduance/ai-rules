@@ -24,7 +24,14 @@ from ai_client_governance.records import (
     tool_flow,
     tool_invocations,
 )
-from ai_client_governance.runtime import client_flow_probe, contract, registry as runtime_registry, shell_adapter, task_run
+from ai_client_governance.runtime import (
+    client_flow_probe,
+    contract,
+    registry as runtime_registry,
+    shell_adapter,
+    task_run,
+    tool_gateway,
+)
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
 from ai_client_governance.worktree import coord as worktree_coord
@@ -59,6 +66,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "telemetry": ("Analyze unified execution telemetry.", telemetry.main),
     "templates": ("Render Markdown templates.", templates.main),
     "selftest": ("Run ai-client-governance black-box self-tests.", selftest.main),
+    "tool-gateway": ("Inspect schema-first agent tool gateway specs.", tool_gateway.main),
     "tool-flow": ("Report invocation trace flow.", tool_flow.main),
     "tool-invocations": ("Run or record command-adapter telemetry spans.", tool_invocations.main),
     "validate-doc": ("Validate document task evidence.", validate_doc_task.main),

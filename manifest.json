@@ -7,7 +7,7 @@
     "targetPath": ".ai-client/ai-client-governance",
     "defaultMethod": "git-submodule",
     "preferredMethod": "git-submodule",
-    "fallbackMethod": "nested-git-clone",
+    "alternateMethod": "nested-git-clone-explicit-user-choice",
     "existingPreparedRepoMethod": "existing-embedded-git-repository"
   },
   "rulesLayout": {
@@ -243,10 +243,10 @@
       "entrypointResolutionPolicy": "runtime command generators and diagnostics resolve only embedded .ai-client/ai-client-governance or governance-repo-local scripts/ai_client_governance.py; host-root scripts/ai_client_governance.py is not a fallback",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, aicg.db worktree state, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
-      "agentReviewResultPolicy": "design_only until implemented by task-record gate, runtime component, worktree closeout, host-closeout, agent-groups/agent-comm status, and selftests: multi-agent execution chains require reviewer AI pass/fail results for each executor AI task id or leaf id before merge, closeout, or task-queue transition to done; result facts must include reviewer, executor, reviewed task id, pass/fail, lifecycle fact check, commit status check, unhandled items, low-quality items, evidence, remediation guidance, retest plan, and retest result; lifecycle fact checks must cover task queue lifecycle, task record status, requirements/triggers/outputs/worktrees/validations/events, final gate, worktree live state, branch/head, dirty status, commit/merge/push status, validation results, telemetry/raw shell gap, and active/pending state; fail results, stale lifecycle records, unresolved P0/P1 issues, missing remediation, or missing retest evidence block merge",
+      "agentReviewResultPolicy": "implemented for task-gate, task-record gate --event final, runtime component registration, and selftests; pending for worktree closeout, host-closeout, and agent-groups/agent-comm status: multi-agent execution chains require reviewer Agent pass/fail results for each executor Agent task id or leaf id before merge, closeout, or task-queue transition to done; result facts use agent-neutral client_type fields and must include reviewer_agent, reviewer_client_type, executor_agent, executor_client_type, reviewed task id or leaf id, pass/fail, lifecycle fact check, commit status check, unhandled items, low-quality items, evidence, remediation guidance, retest plan, and retest result; lifecycle fact checks must cover task queue lifecycle, task record status, requirements/triggers/outputs/worktrees/validations/events, final gate, worktree live state, branch/head, dirty status, commit/merge/push status, validation results, telemetry/raw shell gap, and active/pending state; fail results, stale lifecycle records, unresolved P0/P1 issues, missing remediation, missing client_type, non-independent reviewer, or missing retest evidence block merge",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push",
       "lifecycleSopPolicy": "non-readonly mutating/rules/docs/git/correction/multi-agent/long-running tasks must follow sync-check, lifecycle input-filter, task-queue, task-record apply/gate, worktree-task create, preflight, task-run or gate-pool execution, completion-test, final gate, optional worktree closeout, then task-queue transition --to done; each phase must produce structured facts",
-      "taskRecordQueueCompletionPolicy": "task-queue transition --to done is allowed only after the task record exists, final gate passes, requirements are closed, worktree live state is recorded, validation and telemetry facts exist, design-only multi-agent reviewer result requirements are either implemented and passing or recorded as blocked/follow-up, and no unexplained dirty worktree, missing_in_task_record, command-error, policy-blocked command, or raw shell gap remains",
+      "taskRecordQueueCompletionPolicy": "task-queue transition --to done is allowed only after the task record exists, final gate passes, requirements are closed, worktree live state is recorded, validation and telemetry facts exist, multi-agent reviewer result requirements pass task-record final gate or are recorded as blocked/follow-up, and no unexplained dirty worktree, missing_in_task_record, command-error, policy-blocked command, or raw shell gap remains",
       "multiWorktreeFactsPolicy": "one active root task may own multiple worktrees, but each worktree must record root_task_id, task_node_id or leaf id, repo, slug, branch, base commit, owner agent, write scope, forbidden paths, validation command, return capsule, review pass/fail status, commit/merge/push status, integration owner, conflict matrix, and next action",
       "commandErrorTaxonomyPolicy": "unexpected command failures must be recorded as command-error.analysis or equivalent facts with failed_command, exit_code, phase, parser_or_shell, failure_category, root_cause, corrected_command, retry_count, dedupe_key, preventive_rule, telemetry evidence, state impact, and framework-debt decision; runtime classification covers python -c inline quoting, inline JSON, complex inline PowerShell, governance argparse usage errors, Git failures, cwd misuse, and PowerShell command-not-found patterns",
       "gitWriteGovernancePolicy": "shell-adapter proxy-powershell proves shell telemetry only; git add, commit, merge, push, rm, and mv must also pass policy assess, task-run run, or higher-level worktree-task/host-closeout paths, while direct raw git writes require break-glass evidence",
@@ -270,6 +270,7 @@
       "state-audit"
     ],
     "runtimeCommands": {
+      "capabilityReport": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime capability-report",
       "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
       "exportDeclarativeRegistry": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime export-declarative-registry --check",
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
@@ -292,6 +293,7 @@
       "taskQueueTransition": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue transition",
       "gatePool": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool",
       "completionTest": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test",
+      "toolGateway": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime tool-gateway",
       "worktreeReconcile": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task reconcile --strict",
       "worktreeCloseoutAll": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task closeout-all --plan",
       "hostCloseout": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task host-closeout --repo ai-client-governance --require-task-tracking --require-clean-host"
@@ -548,7 +550,7 @@
   "installer": {
     "script": "install-ai-client-governance.ps1",
     "defaultMode": "git-submodule",
-    "fallbackMode": "nested-git-clone",
+    "alternateMode": "nested-git-clone-explicit-user-choice",
     "existingPreparedRepoMode": "existing-embedded-git-repository",
     "supportsPlanOnly": true,
     "supportsPowerShellWhatIf": true,
