@@ -4878,6 +4878,151 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
     )
 
 
+def test_task_record_evidence_graph_and_command_error_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "task-record-evidence-command-error.db"
+    invalid_task = "TASK-EVIDENCE-CMD-INVALID"
+    valid_task = "TASK-EVIDENCE-CMD-VALID"
+
+    invalid_payload = structured_payload(invalid_task)
+    invalid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{invalid_task}-COMMAND-ERROR",
+            "event_type": structured_task_record.COMMAND_ERROR_EVENT,
+            "payload": {
+                "failed_command": "python -c broken",
+                "exit_code": 2,
+                "phase": "validation",
+                "parser_or_shell": "python",
+                "failure_category": "unclassified_command_failure",
+                "root_cause": "",
+                "corrected_command": "",
+                "retry_count": 1,
+                "dedupe_key": "selftest-command-error",
+                "preventive_rule": "classify before retry",
+                "telemetry_evidence": "span:selftest",
+                "state_impact": "none",
+                "framework_debt_decision": "not-recorded",
+            },
+        }
+    )
+
+    valid_payload = structured_payload(valid_task)
+    valid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{valid_task}-COMMAND-ERROR",
+            "event_type": structured_task_record.COMMAND_ERROR_EVENT,
+            "payload": {
+                "failed_command": "python -c broken",
+                "exit_code": 2,
+                "phase": "validation",
+                "parser_or_shell": "python",
+                "failure_category": "python_c_inline_quoting",
+                "root_cause": "inline Python command was fragile",
+                "corrected_command": "write a temporary script or use a file-backed command",
+                "retry_count": 1,
+                "dedupe_key": "selftest-command-error",
+                "preventive_rule": "use command-file rewriting for complex inline commands",
+                "telemetry_evidence": "span:selftest",
+                "state_impact": "no repository state changed",
+                "framework_debt_decision": "covered-by-command-error-interceptor",
+            },
+        }
+    )
+
+    invalid_path = run_dir / "task-record-command-error-invalid.json"
+    valid_path = run_dir / "task-record-command-error-valid.json"
+    write_text_lf(invalid_path, json.dumps(invalid_payload, ensure_ascii=False, indent=2))
+    write_text_lf(valid_path, json.dumps(valid_payload, ensure_ascii=False, indent=2))
+
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(invalid_path)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                invalid_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid_path)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "final",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "evidence-graph",
+                "--task-id",
+                valid_task,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    invalid_output = commands[2].stdout + commands[2].stderr
+    valid_output = commands[4].stdout + commands[4].stderr
+    graph: dict[str, object] = {}
+    try:
+        graph = json.loads(commands[5].stdout)
+    except json.JSONDecodeError:
+        pass
+    linked_counts = graph.get("linked_counts", {}) if isinstance(graph.get("linked_counts"), dict) else {}
+    events = linked_counts.get("events", {}) if isinstance(linked_counts.get("events"), dict) else {}
+    requirements = linked_counts.get("requirements", {}) if isinstance(linked_counts.get("requirements"), dict) else {}
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and commands[5].exit_code == 0
+        and "command-error.analysis events must classify failures" in invalid_output
+        and "command-error analysis facts present" in valid_output
+        and graph.get("status") == "pass"
+        and int(events.get("count", 0)) >= 1
+        and int(requirements.get("count", 0)) >= 1
+        and graph.get("correlation_spine", {}).get("root") == "task_id"
+    )
+    return TestResult(
+        name="task-record-evidence-graph-command-error-gate",
+        passed=passed,
+        summary=(
+            "task-record evidence-graph links task evidence and final gate rejects unclassified command errors"
+            if passed
+            else "task-record evidence graph or command-error gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
     from ai_client_governance.worktree.task import closeout_owned_host_paths
 
@@ -6604,6 +6749,7 @@ def main() -> int:
             test_gate_pool_auto_snapshot_and_agent_trace_context(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_command_error_taxonomy_and_compact_flow(root, run_dir),
+            test_task_record_evidence_graph_and_command_error_gate(root, run_dir),
             test_file_ownership_audit(root, run_dir),
             test_install_adapter_reconcile(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),

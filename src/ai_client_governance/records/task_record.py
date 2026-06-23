@@ -108,6 +108,7 @@ DOC_IMPACT_EVENT = "doc-impact.analysis"
 STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
+COMMAND_ERROR_EVENT = "command-error.analysis"
 AGENT_DISPATCH_BRIEF_EVENT = "agent-dispatch-brief.analysis"
 AGENT_REVIEW_RESULT_EVENT = "agent-review-result.analysis"
 AGENT_DECISION_EVENT = "agent-decision.analysis"
@@ -116,6 +117,21 @@ SHELL_PROXY_USAGE_EVENT = "shell-proxy-usage.analysis"
 HISTORY_REQUIREMENT_RECOVERY_EVENT = "history-requirement-recovery.analysis"
 READONLY_SIDE_EFFECT_EVENT = "readonly-side-effect-policy.analysis"
 SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
+COMMAND_ERROR_REQUIRED_FIELDS = (
+    "failed_command",
+    "exit_code",
+    "phase",
+    "parser_or_shell",
+    "failure_category",
+    "root_cause",
+    "corrected_command",
+    "retry_count",
+    "dedupe_key",
+    "preventive_rule",
+    "telemetry_evidence",
+    "state_impact",
+    "framework_debt_decision",
+)
 
 
 @dataclass
@@ -207,6 +223,11 @@ def parse_args() -> argparse.Namespace:
     status = sub.add_parser("status", help="Print database summary.")
     common_cli_args.add_common_global_args(status, suppress_default=True)
     status.add_argument("--task-id", help="Optional task id.")
+
+    evidence_graph = sub.add_parser("evidence-graph", help="Audit all task-id linked evidence for one task.")
+    common_cli_args.add_common_global_args(evidence_graph, suppress_default=True)
+    evidence_graph.add_argument("--task-id", required=True)
+    evidence_graph.add_argument("--include-telemetry", action="store_true", default=True)
 
     describe = sub.add_parser("describe", help="Print the task-record schema: tables, fields, enums, and a sample JSON payload.")
     common_cli_args.add_common_global_args(describe, suppress_default=True)
@@ -1419,6 +1440,214 @@ def event_payloads(con: sqlite3.Connection, task_id: str, event_type: str) -> li
     return payloads
 
 
+def table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def json_row_count(con: sqlite3.Connection, table: str, task_id: str) -> dict[str, Any]:
+    if not table_exists(con, table):
+        return {"table": table, "present": False, "count": 0}
+    if table in {"corrections", "framework_debt"}:
+        column = "related_task_id"
+    else:
+        column = "task_id"
+    try:
+        count = con.execute(f"SELECT count(*) FROM {table} WHERE {column} = ?", (task_id,)).fetchone()[0]
+    except sqlite3.Error as exc:
+        return {"table": table, "present": True, "count": 0, "error": str(exc)}
+    return {"table": table, "present": True, "count": int(count)}
+
+
+def telemetry_command_error_summary(con: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    if not table_exists(con, "execution_spans"):
+        return {
+            "table": "execution_spans",
+            "present": False,
+            "failed_span_count": 0,
+            "unclassified_failure_count": 0,
+        }
+    failed_rows = con.execute(
+        """
+        SELECT span_id, attributes_json
+        FROM execution_spans
+        WHERE task_id = ?
+          AND (status = 'failed' OR coalesce(exit_code, 0) != 0)
+        """,
+        (task_id,),
+    ).fetchall()
+    unclassified = 0
+    categories: dict[str, int] = {}
+    for row in failed_rows:
+        try:
+            attrs = json.loads(row["attributes_json"] or "{}")
+        except json.JSONDecodeError:
+            attrs = {}
+        command_error = attrs.get("command_error") if isinstance(attrs, dict) else {}
+        if not isinstance(command_error, dict):
+            command_error = {}
+        category = str(command_error.get("failure_category") or "unclassified_command_failure")
+        categories[category] = categories.get(category, 0) + 1
+        if category == "unclassified_command_failure":
+            unclassified += 1
+    return {
+        "table": "execution_spans",
+        "present": True,
+        "failed_span_count": len(failed_rows),
+        "unclassified_failure_count": unclassified,
+        "failure_categories": categories,
+    }
+
+
+def build_evidence_graph(con: sqlite3.Connection, task_id: str, include_telemetry: bool = True) -> dict[str, Any]:
+    task = task_row(con, task_id)
+    linked_tables = [
+        "tasks",
+        "approvals",
+        "requirements",
+        "triggers",
+        "outputs",
+        "worktrees",
+        "validations",
+        "events",
+        "gate_runs",
+    ]
+    linked_counts = {table: json_row_count(con, table, task_id) for table in linked_tables}
+    optional_counts = {
+        "corrections": json_row_count(con, "corrections", task_id),
+        "framework_debt": json_row_count(con, "framework_debt", task_id),
+    }
+    telemetry = telemetry_command_error_summary(con, task_id) if include_telemetry else {"skipped": True}
+    required_minimums = {
+        "tasks": 1,
+        "requirements": 1,
+        "triggers": 1,
+        "outputs": 1,
+        "events": 1,
+    }
+    gaps: list[str] = []
+    if task is None:
+        gaps.append("tasks:missing")
+    for table, minimum in required_minimums.items():
+        if int(linked_counts.get(table, {}).get("count", 0)) < minimum:
+            gaps.append(f"{table}:count<{minimum}")
+    if include_telemetry and telemetry.get("present") and int(telemetry.get("unclassified_failure_count", 0)) > 0:
+        gaps.append("telemetry:unclassified_command_failure")
+    return {
+        "schema_version": 1,
+        "task_id": task_id,
+        "status": "pass" if not gaps else "fail",
+        "task_present": task is not None,
+        "linked_counts": linked_counts,
+        "optional_task_scoped_counts": optional_counts,
+        "telemetry": telemetry,
+        "gaps": gaps,
+        "correlation_spine": {
+            "root": "task_id",
+            "telemetry": "execution_spans.task_id plus trace_id/span_id",
+            "corrections": "corrections.related_task_id",
+            "framework_debt": "framework_debt.related_task_id",
+        },
+    }
+
+
+def render_evidence_graph(report: dict[str, Any]) -> str:
+    lines = [
+        "Task Evidence Graph",
+        f"Task: {report['task_id']}",
+        f"Status: {report['status']}",
+        "Linked rows:",
+    ]
+    for table, item in report["linked_counts"].items():
+        lines.append(f"- {table}: {item.get('count', 0)} ({'present' if item.get('present') else 'missing table'})")
+    lines.append("Optional task-scoped rows:")
+    for table, item in report["optional_task_scoped_counts"].items():
+        lines.append(f"- {table}: {item.get('count', 0)} ({'present' if item.get('present') else 'missing table'})")
+    telemetry = report.get("telemetry", {})
+    if isinstance(telemetry, dict):
+        lines.append(
+            "Telemetry command errors: "
+            f"failed={telemetry.get('failed_span_count', 0)} "
+            f"unclassified={telemetry.get('unclassified_failure_count', 0)}"
+        )
+    if report["gaps"]:
+        lines.append("Gaps: " + ", ".join(report["gaps"]))
+    else:
+        lines.append("Gaps: none")
+    return "\n".join(lines)
+
+
+def command_error_payload_errors(payload: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in COMMAND_ERROR_REQUIRED_FIELDS:
+        if field == "retry_count":
+            if payload.get(field) is None:
+                issues.append(field)
+            continue
+        if not payload_nonempty(payload.get(field)):
+            issues.append(field)
+    if str(payload.get("failure_category") or "").strip() == "unclassified_command_failure":
+        issues.append("failure_category.unclassified_command_failure")
+    return issues
+
+
+def validate_command_error_analysis(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Fail final gates when command failures are not classified and resolved."""
+    if event != "final":
+        return
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    payloads = event_payloads(con, task["task_id"], COMMAND_ERROR_EVENT)
+    invalid: list[str] = []
+    for event_id, payload in payloads:
+        payload_errors = command_error_payload_errors(payload)
+        if payload_errors:
+            invalid.append(f"{event_id}:{','.join(payload_errors)}")
+
+    telemetry_summary = telemetry_command_error_summary(con, task["task_id"])
+    failed_spans = int(telemetry_summary.get("failed_span_count", 0) or 0)
+    unclassified_spans = int(telemetry_summary.get("unclassified_failure_count", 0) or 0)
+    if invalid:
+        add(
+            errors,
+            "error",
+            "command-error.analysis events must classify failures and include required remediation fields",
+            "events",
+            "; ".join(invalid),
+        )
+    elif payloads:
+        add(notes, "note", f"command-error analysis facts present: {COMMAND_ERROR_EVENT}", "events")
+
+    if failed_spans and not payloads:
+        add(
+            errors,
+            "error",
+            "telemetry records failed command spans but no command-error.analysis event was recorded",
+            "events",
+            f"failed_spans={failed_spans}",
+        )
+    if unclassified_spans:
+        add(
+            errors,
+            "error",
+            "telemetry contains unclassified command failures; classify them before final closeout",
+            "execution_spans",
+            f"unclassified={unclassified_spans}",
+        )
+
+
 def validate_plan_approval_boundary(
     con: sqlite3.Connection,
     task: sqlite3.Row,
@@ -2452,6 +2681,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_design_package(con, task, task_types, errors, notes)
     validate_analysis_contract_preflight(con, task, task_types, event, errors, notes)
     validate_capability_gateway_facts(con, task, task_types, event, db, errors, notes)
+    validate_command_error_analysis(con, task, task_types, event, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}
@@ -2629,6 +2859,24 @@ def main() -> int:
                 summary = task_summary(con, args.task_id)
             print_json(summary) if args.format == "json" else print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
+        if args.command == "evidence-graph":
+            if not path.exists():
+                report = {
+                    "schema_version": 1,
+                    "task_id": args.task_id,
+                    "status": "fail",
+                    "task_present": False,
+                    "linked_counts": {},
+                    "optional_task_scoped_counts": {},
+                    "telemetry": {},
+                    "gaps": ["db:missing"],
+                    "correlation_spine": {"root": "task_id"},
+                }
+            else:
+                con = connect(path, create=False)
+                report = build_evidence_graph(con, args.task_id, include_telemetry=args.include_telemetry)
+            print_json(report) if args.format == "json" else print(render_evidence_graph(report))
+            return 0 if report.get("status") == "pass" else 1
 
         create_db = args.command in {"init", "apply"}
         con = connect(path, create=create_db)
