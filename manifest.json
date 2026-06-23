@@ -43,6 +43,7 @@
       "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose --format json",
       "policyAssess": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py policy assess --command <command> --fail-on approval_required",
       "sessionBootstrap": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py session-bootstrap --root .",
+      "skillSync": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py skill-sync list --root .",
       "telemetryReport": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report --summary --format json",
       "jsonQuery": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py json-query --path <json.path> -- <json-producing-command>",
       "telemetryEffectiveness": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry effectiveness --baseline-trace-id <trace-id> --candidate-trace-id <trace-id> --format json",
@@ -234,6 +235,7 @@
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight and capability-gateway.facts fail closed for mutating work",
       "sessionBootstrapPolicy": "session-bootstrap is the default session-start rule entry command: it reads root/common/project AGENTS metadata, bounded heading indexes, and sync-check warnings without dumping rule bodies. Deep reads must use context-extract --headings, --match, or --range.",
+      "skillDiscoveryPolicy": "Repository-local skills stay sourced from .ai-client/project/skills and .ai-client/ai-client-governance/skills. When a host client only discovers project-root skills/, use skill-sync install-local to expose local links/copies in the current project; do not install these repository skills into global CODEX_HOME by default.",
       "clientIdentityPolicy": "lifecycle input-filter must record events.event_type=client-identity.analysis with client_type and model_id so task-record and telemetry reports can identify which AI clients or models skipped the standard flow; unknown identity is explicit and warning-worthy, not silently omitted.",
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; runtime components include a mutating-task fast path so small repository writes cannot skip the node; task-run plan provides the local dedupe, grouping, and per-command capability/risk/side-effect event payload",
       "securityPolicy": "policy assess and the security-policy gate provide deterministic local checks for prompt injection, sensitive information, command injection, supply-chain, Git write, destructive command, network, and path-boundary risk; host-native raw shell interception remains outside the plugin, so governed command paths and diagnostics fail closed instead of claiming runtime-level interception. Raw shell governance must use non-invasive local command proxy or env activation by default, not user profile or global shell mutation.",
@@ -282,6 +284,7 @@
       "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose",
       "policyAssess": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py policy assess",
       "sessionBootstrap": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py session-bootstrap --root .",
+      "skillSync": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py skill-sync list --root .",
       "shellAdapterDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter diagnose",
       "shellAdapterProxyPowerShell": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter proxy-powershell --powershell-command <command>",
       "telemetryReport": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report --summary",
@@ -525,6 +528,7 @@
     "skills": [
       "skills/agents-rule-maintainer",
       "skills/codex-token-usage",
+      "skills/lifecycle-governance",
       "skills/self-correction-planner"
     ],
     "scripts": [

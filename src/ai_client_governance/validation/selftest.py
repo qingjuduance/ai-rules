@@ -6389,6 +6389,124 @@ def test_session_bootstrap_compact_rule_entry(root: Path, run_dir: Path) -> Test
     )
 
 
+def test_skill_sync_local_install(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "skill-sync-project"
+    common = project / ".ai-client" / "ai-client-governance" / "skills" / "common-skill"
+    project_skill = project / ".ai-client" / "project" / "skills" / "project-skill"
+    common.mkdir(parents=True, exist_ok=True)
+    project_skill.mkdir(parents=True, exist_ok=True)
+    write_text_lf(common / "SKILL.md", "---\nname: common-skill\ndescription: Common selftest skill.\n---\n\n# Common\n")
+    write_text_lf(project_skill / "SKILL.md", "---\nname: project-skill\ndescription: Project selftest skill.\n---\n\n# Project\n")
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "skill-sync",
+                "list",
+                "--root",
+                str(project),
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "skill-sync",
+                "install-local",
+                "--root",
+                str(project),
+                "--mode",
+                "copy",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "skill-sync",
+                "install-local",
+                "--root",
+                str(project),
+                "--mode",
+                "copy",
+                "--execute",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "skill-sync",
+                "list",
+                "--root",
+                str(project),
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    listed: dict[str, object] = {}
+    dry_run: dict[str, object] = {}
+    executed: dict[str, object] = {}
+    post_install: dict[str, object] = {}
+    try:
+        listed = json.loads(commands[0].stdout)
+        dry_run = json.loads(commands[1].stdout)
+        executed = json.loads(commands[2].stdout)
+        post_install = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    listed_skills = listed.get("skills", []) if isinstance(listed.get("skills"), list) else []
+    listed_names = {item.get("name") for item in listed_skills if isinstance(item, dict)}
+    post_skills = post_install.get("skills", []) if isinstance(post_install.get("skills"), list) else []
+    active_sources = {
+        item.get("name"): item.get("source_kind")
+        for item in post_skills
+        if isinstance(item, dict) and item.get("active") is True
+    }
+    dry_results = dry_run.get("results", []) if isinstance(dry_run.get("results"), list) else []
+    exec_results = executed.get("results", []) if isinstance(executed.get("results"), list) else []
+    local_dest = project / "skills"
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and listed.get("local_skills_dir") == str(local_dest.resolve())
+        and {"common-skill", "project-skill"}.issubset(listed_names)
+        and all(isinstance(item, dict) and item.get("status") == "planned" for item in dry_results)
+        and all(isinstance(item, dict) and item.get("status") == "installed" for item in exec_results)
+        and active_sources.get("project-skill") == "project"
+        and active_sources.get("common-skill") == "common"
+        and (local_dest / "common-skill" / "SKILL.md").exists()
+        and (local_dest / "project-skill" / "SKILL.md").exists()
+        and ".codex" not in commands[2].stdout
+        and "CODEX_HOME" not in commands[2].stdout
+    )
+    return TestResult(
+        name="skill-sync-local-install",
+        passed=passed,
+        summary=(
+            "skill-sync exposes .ai-client skills through the current project's local skills directory"
+            if passed
+            else "skill-sync local install regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "analysis-contract.db"
     task_id = "TASK-SELFTEST-ANALYSIS-CONTRACT"
@@ -7062,6 +7180,7 @@ def main() -> int:
             test_doc_index_defaults_to_host_from_worktree_cwd(root, run_dir),
             test_runtime_manifest_report(root, run_dir),
             test_session_bootstrap_compact_rule_entry(root, run_dir),
+            test_skill_sync_local_install(root, run_dir),
             test_lifecycle_analysis_contract_preflight(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_coord_nested_global_args(root, run_dir),

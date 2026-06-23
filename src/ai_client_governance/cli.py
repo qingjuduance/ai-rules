@@ -11,7 +11,7 @@ from ai_client_governance.agents import group_status
 from ai_client_governance.audit import file_ownership, rule_tooling_audit
 from ai_client_governance.docs import doc_index, validate_doc_task
 from ai_client_governance.gates import architecture_guard, gate_pool, policy, session_gate, task_gate
-from ai_client_governance.io import context_extract, json_query, session_bootstrap
+from ai_client_governance.io import context_extract, json_query, session_bootstrap, skill_sync
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
 from ai_client_governance.records import (
@@ -53,6 +53,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
     "json-query": ("Extract fields from JSON without shell pipes or inline python -c.", json_query.main),
     "session-bootstrap": ("Print compact session-start rule and sync facts.", session_bootstrap.main),
+    "skill-sync": ("Discover and expose repository-local Codex skills.", skill_sync.main),
     "policy": ("Assess unified security and command policy.", policy.main),
     "lifecycle": ("Run lifecycle preflight/finalize/status.", lifecycle.main),
     "rule-audit": ("Audit rule-entry and README sections for tooling migration.", rule_tooling_audit.main),
@@ -86,6 +87,7 @@ SHORT_ALIASES: dict[str, str] = {
     "lc": "lifecycle",
     "go": "sync-check",
     "sb": "session-bootstrap",
+    "ss": "skill-sync",
     "gt": "gate-pool",
     "st": "selftest",
 }

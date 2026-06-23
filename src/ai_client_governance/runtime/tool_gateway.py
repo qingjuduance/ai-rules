@@ -247,6 +247,36 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         compact_output_policy="Default output omits rule bodies and only reports metadata, bounded headings, sync warnings, and safe drill-down commands.",
     ),
     ToolSpec(
+        name="skill_sync",
+        description="List and expose .ai-client skills through the current project's local skills directory.",
+        command="skill-sync",
+        side_effect="repo_write",
+        parallel_safe=False,
+        control_layer="plugin",
+        enforcement_level="schema_validated_when_called",
+        parameters_schema=object_schema(
+            {
+                "command": {"type": "string", "enum": ["list", "install-local"]},
+                "root": {"type": "string", "default": "."},
+                "dest": {"type": "string", "default": "skills"},
+                "skill": {"type": "array", "items": {"type": "string"}},
+                "execute": {"type": "boolean", "default": False},
+                "mode": {"type": "string", "enum": ["junction", "symlink", "copy"], "default": "junction"},
+                "format": {"type": "string", "enum": ["text", "json"], "default": "text"},
+            },
+            required=["command"],
+        ),
+        output_schema=object_schema(
+            {
+                "local_skills_dir": {"type": "string"},
+                "skills": {"type": "array"},
+                "results": {"type": "array"},
+                "missing_requested_skills": {"type": "array", "items": {"type": "string"}},
+            }
+        ),
+        compact_output_policy="Return skill names, source priority, install status, and local destination only; never install into global CODEX_HOME.",
+    ),
+    ToolSpec(
         name="shell_adapter_proxy_powershell",
         description="Run a PowerShell command through the non-invasive no-profile command proxy.",
         command="shell-adapter proxy-powershell",

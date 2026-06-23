@@ -2020,6 +2020,50 @@
       "task_types": []
     },
     {
+      "condition": "Run when repository-local skills are present but the host client only discovers root skills/. The source of truth remains .ai-client; root skills/ is a local discovery adapter, not a global install.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "List and locally expose .ai-client skills through the current project's root skills directory.",
+      "effect": "repo_write",
+      "events": [
+        "session-start",
+        "status-output",
+        "resume"
+      ],
+      "fail_policy": "warn_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "skill-sync",
+      "id": "state.reporter.skill-sync",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py skill-sync list/install-local",
+      "metadata": {
+        "default_destination": "skills/",
+        "global_install_forbidden": true,
+        "source_priority": [
+          "project",
+          "common"
+        ]
+      },
+      "order": 406,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "bounded directory scan plus optional local junction/symlink/copy creation",
+      "phase": "session",
+      "produces_facts": [
+        "local_skill_sources",
+        "local_skill_install_plan"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "project_skills",
+        "common_governance_skills"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
       "condition": "Run at session start or status output; this is not a timed scheduler.",
       "dedupe_key": "",
       "dependencies": [],

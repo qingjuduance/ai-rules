@@ -515,6 +515,11 @@ powershell -ExecutionPolicy Bypass -File <ai-client-governance-path>\install-ai-
   需要在当前改造范围内迁移或删除，而不是新增兼容层。
 - `.ai-client/project/skills/` 是项目特化层：用于放置根据 ai-client-governance 流程、纠错和当前项目
   经验生成的 skill，不用于承接通用 skill 的复制副本。
+- 如果当前 AI 客户端只从项目根 `skills/` 发现 Codex skills，运行
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py skill-sync install-local --root . --execute`
+  在当前项目创建本地发现 adapter。事实源仍是 `.ai-client/project/skills/` 和
+  `.ai-client/ai-client-governance/skills/`；不要把这些仓库 skill 安装到全局
+  `CODEX_HOME/skills`，也不要回退到旧 `.codex/skills/`。
 - skill 同名时按"原生项目 skill > `.ai-client/project` skill > `ai-client-governance` skill"选择，
   后续由架构守卫或人工 review 报告冲突。
 - `.ai-client/ai-client-governance/` 已存在且是已注册 submodule：不重复添加，只继续配置检查。
